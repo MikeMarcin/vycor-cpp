@@ -23,12 +23,12 @@ permissions:
 jobs:
   fuzz:
     runs-on: ubuntu-24.04
-    name: Fuzz (LLVM 21)
+    name: Fuzz (LLVM 22)
     # Four targets at the nightly 20 min, plus the build and the corpus
     # merge; a pull request's run is 60 s per target.
     timeout-minutes: ${{ github.event_name == 'pull_request' && 60 || 180 }}
     env:
-      LLVM_VERSION: "21"
+      LLVM_VERSION: "22"
       PR_SECONDS: "60"
       NIGHTLY_SECONDS: "1200"
     steps:

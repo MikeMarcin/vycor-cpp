@@ -485,7 +485,7 @@ boundary edges (non-collapsed caller → collapsed callee) are preserved.
   --version` report both the vycor-cpp version and the embedded LLVM
   version. See `COMPATIBILITY.md` "Tagging and releases" for the version/tag
   scheme this feeds.
-- Iterates `VYCOR_SUPPORTED_LLVM_VERSIONS` (currently `21 20 18`,
+- Iterates `VYCOR_SUPPORTED_LLVM_VERSIONS` (currently `22 21 20 18`,
   newest first) via `find_package()`. The CI matrix in
   `.github/workflows/ci.yml` mirrors this list.
 - Falls back to `extern/llvm-project` submodule if no system package matches.
@@ -774,7 +774,7 @@ only, not a namespace boundary.
 
 ## External Dependencies
 
-- **LLVM/Clang 18, 20, or 21** — system package preferred (`find_package`),
+- **LLVM/Clang 18, 20, 21, or 22** — system package preferred (`find_package`),
   git submodule at `extern/llvm-project` as fallback. Selectable via
   `CMAKE_PREFIX_PATH=/usr/lib/llvm-NN`.
 - **Catch2 v3.10+** (tests only) — resolved in three tiers: pre-existing

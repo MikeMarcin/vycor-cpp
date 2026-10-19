@@ -74,7 +74,7 @@ jobs:
       matrix: ${{ fromJson(needs.determine-matrix.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     # macos-latest's current OS major (sequoia and newer, at last check) is
-    # bottled by Homebrew's llvm@{18,20,21} formulas, so this doesn't need
+    # bottled by Homebrew's llvm@{18,20,21,22} formulas, so this doesn't need
     # the long from-source-build timeout the old macos-13 (Ventura) leg did.
     # If a future macos-latest bump lands on an OS major Homebrew hasn't
     # bottled yet, re-check https://formulae.brew.sh before assuming 60min

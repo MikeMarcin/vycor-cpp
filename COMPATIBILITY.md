@@ -17,11 +17,12 @@ branches, so contributors know what to expect when a fix lands on `main`.
 | 18 | supported | yes | Oldest supported. Ubuntu 24.04 archive default. |
 | 19 | not supported | — | Skipped (no current demand). Intermediate between 18 and 20. |
 | 20 | supported | yes | Mid-range stable target. |
-| 21 | supported | yes | Current. |
-| 22+ | not supported | — | Will be added on demand. |
+| 21 | supported | yes | Previous stable target. |
+| 22 | supported | yes | Current. |
+| 23+ | not supported | — | Will be added on demand. |
 
 `CMakeLists.txt` declares the canonical list as
-`VYCOR_SUPPORTED_LLVM_VERSIONS` (currently `21 20 18`). The CI matrix in
+`VYCOR_SUPPORTED_LLVM_VERSIONS` (currently `22 21 20 18`). The CI matrix in
 `.github/workflows/ci.yml` mirrors this list. Both must stay in sync.
 
 To pin a specific LLVM at configure time:
@@ -152,7 +153,7 @@ apply once they do.
 
 ### Branch model
 
-- `main` — newest supported LLVM (21). New features land here first.
+- `main` — newest supported LLVM (22). New features land here first.
 - `release/llvm-NN` — frozen against LLVM major NN. Receives bug fixes and
   security fixes. Refuses features unless the feature is genuinely
   cross-version-clean.

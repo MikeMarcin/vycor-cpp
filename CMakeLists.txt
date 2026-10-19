@@ -31,7 +31,7 @@ set(VYCOR_DEFAULT_CLANG "clang++" CACHE STRING
 # --- LLVM/Clang: prefer system packages, fall back to submodule ---
 # Supported LLVM versions, checked in order (newest first).
 # To add a new version, append it to this list.
-set(VYCOR_SUPPORTED_LLVM_VERSIONS 21 20 18)
+set(VYCOR_SUPPORTED_LLVM_VERSIONS 22 21 20 18)
 
 set(LLVM_SUBMODULE_DIR "${CMAKE_SOURCE_DIR}/extern/llvm-project/llvm")
 

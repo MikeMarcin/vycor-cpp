@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        llvm-version: [18, 20, 21]
+        llvm-version: [18, 20, 21, 22]
 
     name: LLVM ${{ matrix.llvm-version }}
 
@@ -62,10 +62,10 @@ jobs:
   # corpus included.
   release:
     runs-on: ubuntu-24.04
-    name: Release (LLVM 21)
+    name: Release (LLVM 22)
     timeout-minutes: 60
     env:
-      LLVM_VERSION: "21"
+      LLVM_VERSION: "22"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -109,10 +109,10 @@ jobs:
   # (callgraph/RetainUntilExit.h), so a report is a real leak.
   asan-ubsan:
     runs-on: ubuntu-24.04
-    name: ASan + UBSan (LLVM 21)
+    name: ASan + UBSan (LLVM 22)
     timeout-minutes: 90
     env:
-      LLVM_VERSION: "21"
+      LLVM_VERSION: "22"
       # log_path: every report, from a test or from a subprocess worker
       # whose abort the parent absorbs as a crashed TU, lands in a file
       # that the last step fails on.
@@ -186,10 +186,10 @@ jobs:
   # case (its isolated bake drives the parent's worker dispatcher).
   tsan:
     runs-on: ubuntu-24.04
-    name: TSan (LLVM 21)
+    name: TSan (LLVM 22)
     timeout-minutes: 60
     env:
-      LLVM_VERSION: "21"
+      LLVM_VERSION: "22"
       # log_path: see asan-ubsan.
       TSAN_OPTIONS: "halt_on_error=1:second_deadlock_stack=1:log_path=/tmp/sanitizer-logs/tsan"
     steps:

@@ -69,7 +69,7 @@ Requires CMake 3.20+, a C++17 compiler, and Ninja (recommended).
 
 | Dependency | Required | How it's resolved |
 |---|---|---|
-| LLVM/Clang | 18, 20, or 21 | system package preferred; submodule fallback |
+| LLVM/Clang | 18, 20, 21, or 22 | system package preferred; submodule fallback |
 | Catch2 | v3.10+ (tests only) | imported target -> `find_package` -> submodule fallback |
 
 Neither dependency is fetched at configure time. Hermetic-build
@@ -105,7 +105,7 @@ cd build && ctest --output-on-failure
 
 ### LLVM/Clang resolution
 
-The build tries each supported LLVM major version in turn (21, then 20,
+The build tries each supported LLVM major version in turn (22, then 21, then 20,
 then 18) by probing well-known install paths, then falls back to the
 `extern/llvm-project` submodule. To pin a specific version, point
 `CMAKE_PREFIX_PATH` at it:
