@@ -26,14 +26,16 @@
 #include "clang/Tooling/CompilationDatabase.h"
 #include "llvm/Support/FileSystem.h"
 
-#include <catch2/catch_test_macros.hpp>
+#include "vycor/compat/Path.h"
+#include "vycor/compat/WindowsSupport.h"
+#include "llvm/Support/Process.h"
 #include <algorithm>
+#include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cstdio>
-#include <iterator>
 #include <fstream>
+#include <iterator>
 #include <string>
-#include <unistd.h>
 
 using namespace vycor;
 
@@ -421,7 +423,9 @@ TEST_CASE("snapshot preserves TU provenance for incremental reindex",
   ControlFlowIndex cf = makeCfIndex();
 
   REQUIRE(SnapshotIO::save(path, g, cf, makeMeta()));
-  auto loaded = SnapshotIO::load(path);
+  SnapshotLoadStats stats;
+  auto loaded = SnapshotIO::load(path, &stats);
+  INFO(stats.error);
   std::remove(path.c_str());
   REQUIRE(loaded.has_value());
 
@@ -450,7 +454,9 @@ TEST_CASE("snapshot round-trips ChannelIndex with multi-TU refs and guards",
   ChannelIndex ch = makeChannelIndex();
 
   REQUIRE(SnapshotIO::save(path, g, cf, makeMeta(), ch));
-  auto loaded = SnapshotIO::load(path);
+  SnapshotLoadStats stats;
+  auto loaded = SnapshotIO::load(path, &stats);
+  INFO(stats.error);
   std::remove(path.c_str());
   REQUIRE(loaded.has_value());
 
@@ -486,7 +492,9 @@ TEST_CASE("snapshot drops tombstoned edges on save", "[snapshot]") {
   REQUIRE(g.edgeCount() == 3);
 
   REQUIRE(SnapshotIO::save(path, g, makeCfIndex(), makeMeta()));
-  auto loaded = SnapshotIO::load(path);
+  SnapshotLoadStats stats;
+  auto loaded = SnapshotIO::load(path, &stats);
+  INFO(stats.error);
   std::remove(path.c_str());
   REQUIRE(loaded.has_value());
 
@@ -601,7 +609,7 @@ void setMtime(const std::string &path, uint64_t mtimeNs) {
                                            llvm::sys::fs::OF_Append));
   const llvm::sys::TimePoint<> t{std::chrono::nanoseconds(mtimeNs)};
   CHECK(!llvm::sys::fs::setLastAccessAndModificationTime(fd, t, t));
-  ::close(fd);
+  llvm::sys::Process::SafelyCloseFileDescriptor(fd);
 }
 
 /// What the frontend records for a file it opened: whole-second mtime.
@@ -948,7 +956,9 @@ TEST_CASE("snapshot round-trips multi-contributor deduped edges",
 
   ControlFlowIndex cf;
   REQUIRE(SnapshotIO::save(path, g, cf, makeMeta()));
-  auto loaded = SnapshotIO::load(path);
+  SnapshotLoadStats stats;
+  auto loaded = SnapshotIO::load(path, &stats);
+  INFO(stats.error);
   std::remove(path.c_str());
   REQUIRE(loaded.has_value());
 
@@ -979,14 +989,34 @@ TEST_CASE("dependencies are recorded by the path the file system opened",
   const std::string base = std::string(dir) + "/";
   REQUIRE(!llvm::sys::fs::create_directories(base + "real/inc"));
   REQUIRE(!llvm::sys::fs::create_directories(base + "real/sub"));
+#ifdef _WIN32
+  std::wstring target, link;
+  REQUIRE(windowsUtf16(base + "real/inc", target));
+  REQUIRE(windowsUtf16(base + "link", link));
+  if (!CreateSymbolicLinkW(link.c_str(), target.c_str(),
+                           SYMBOLIC_LINK_FLAG_DIRECTORY |
+                               SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE)) {
+    auto error = GetLastError();
+    llvm::sys::fs::remove_directories(dir);
+    if (error == ERROR_PRIVILEGE_NOT_HELD)
+      SKIP("directory symlink test requires Windows Developer Mode or symlink "
+           "privilege");
+    FAIL(windowsError(error));
+  }
+  // Windows resolves .. before following a directory symlink. Exercise a
+  // direct symlink here; the POSIX branch retains the climb-through-link case.
+  const std::string includePath = base + "link";
+#else
   REQUIRE(!llvm::sys::fs::create_link(base + "real/sub", base + "link"));
+  const std::string includePath = base + "link/../inc";
+#endif
   auto header = writeText(base + "real/inc/h.h", "int h();\n");
   auto tu = writeText(base + "tu.cpp", "#include \"h.h\"\nint m() { return h(); }\n");
 
   llvm::SmallString<256> realHeader;
   REQUIRE(!llvm::sys::fs::real_path(header, realHeader));
   clang::tooling::FixedCompilationDatabase compDb(
-      std::string(dir), {"-std=c++17", "-I", base + "link/../inc"});
+      std::string(dir), {"-std=c++17", "-I", includePath});
   auto baked = bakeIndexes(compDb, {tu}, {}, /*threadCount=*/1);
 
   REQUIRE(baked.deps.count(tu) == 1);
@@ -999,7 +1029,7 @@ TEST_CASE("dependencies are recorded by the path the file system opened",
       s += p + "\n";
     return s;
   }());
-  CHECK(std::find(paths.begin(), paths.end(), std::string(realHeader)) !=
+  CHECK(std::find(paths.begin(), paths.end(), normalizedPath(realHeader)) !=
         paths.end());
   CHECK(std::find(paths.begin(), paths.end(), base + "inc/h.h") ==
         paths.end());

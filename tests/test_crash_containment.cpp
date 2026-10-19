@@ -27,9 +27,11 @@
 #include "vycor/callgraph/PathSearch.h"
 #include "vycor/callgraph/Snapshot.h"
 #include "vycor/callgraph/WorkerPool.h"
+#include "vycor/compat/WindowsSupport.h"
 #include "vycor/query/Limits.h"
 #include "vycor/query/Tools.h"
 
+#include "vycor/compat/Path.h"
 #include "clang/Tooling/CompilationDatabase.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
@@ -64,7 +66,7 @@ struct ScratchDir {
     REQUIRE(!llvm::sys::fs::createUniqueDirectory("vycor-containment", p));
     llvm::SmallString<256> abs;
     REQUIRE(!llvm::sys::fs::real_path(p, abs));
-    dir = std::string(abs);
+    dir = normalizedPath(abs);
   }
   ~ScratchDir() { llvm::sys::fs::remove_directories(dir); }
 
@@ -90,31 +92,14 @@ struct ScratchDir {
 // a bare TU list and the production megascope/anneal argv.
 std::string fakeWorkerScript(const ScratchDir &d, const std::string &shard,
                              const char *pause = "0") {
-  return d.write("fake-worker.sh",
-                 std::string("#!/bin/sh\n"
-                             "out=''\n"
-                             "tus=''\n"
-                             "while [ $# -gt 0 ]; do\n"
-                             "  case \"$1\" in\n"
-                             "    --worker-out) out=\"$2\"; shift ;;\n"
-                             "    --source) tus=\"$tus $2\"; shift ;;\n"
-                             "    -*|megascope|anneal) ;;\n"
-                             "    *) tus=\"$tus $1\" ;;\n"
-                             "  esac\n"
-                             "  shift\n"
-                             "done\n"
-                             "for tu in $tus; do\n"
-                             "  echo \"WORKER-TU $tu\" >&2\n"
-                             "  case \"$tu\" in *hang*) exec sleep 3600 ;; "
-                             "esac\n"
-                             "  sleep ") +
-                     pause +
-                     "\n"
-                     "done\n" +
-                     (shard.empty() ? std::string()
-                                    : "cp '" + shard + "' \"$out\"\n") +
-                     "exit 0\n",
-                 /*executable=*/true);
+  const std::string program = d.dir + "/fake-worker" + VYCOR_TEST_EXE_SUFFIX;
+  REQUIRE(!llvm::sys::fs::copy_file(VYCOR_TEST_WORKER, program));
+  REQUIRE(!llvm::sys::fs::setPermissions(
+      program, llvm::sys::fs::all_read | llvm::sys::fs::all_exe |
+                   llvm::sys::fs::owner_write));
+  d.write("fake-worker" + std::string(VYCOR_TEST_EXE_SUFFIX) + ".vycor-test",
+          shard + "\n" + pause + "\n");
+  return program;
 }
 
 } // namespace
@@ -232,8 +217,13 @@ TEST_CASE("anneal isolatedRunner: a hung worker does not hang the analysis",
 namespace {
 
 void crashOnTarget(const CallGraphEdge &e) {
-  if (e.calleeName.find("vycor_crash_target") != std::string::npos)
+  if (e.calleeName.find("vycor_crash_target") != std::string::npos) {
+#ifdef _WIN32
+    RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr);
+#else
     std::raise(SIGSEGV);
+#endif
+  }
 }
 
 struct HookGuard {
@@ -281,8 +271,12 @@ void vycor_crash_caller() {
 
   REQUIRE(baked.outcomes.count(crashTu));
   CHECK(baked.outcomes.at(crashTu).status == TuStatus::Crashed);
-  CHECK(baked.outcomes.at(crashTu).detail == "signal " +
-                                                 std::to_string(SIGSEGV));
+#ifdef _WIN32
+  CHECK(baked.outcomes.at(crashTu).detail ==
+        crashDescription(EXCEPTION_ACCESS_VIOLATION));
+#else
+  CHECK(baked.outcomes.at(crashTu).detail == crashDescription(SIGSEGV));
+#endif
   CHECK(baked.outcomes.at(okTu).status == TuStatus::Indexed);
   // Nothing of the crashed TU, not even the edge inserted before the fault.
   CHECK_FALSE(hasEdgeFrom(baked.graph, "vycor_crash_caller"));
@@ -306,18 +300,29 @@ int recurseForever(int n) {
 TEST_CASE("runCrashGuarded recovers a stack overflow on a worker thread",
           "[containment][crash-guard]") {
   CrashGuardScope scope;
-  bool ok = true;
-  int sig = 0;
+  bool ok[2] = {true, true};
+  int sig[2] = {0, 0};
+  bool reused = true;
+  int ran = 0;
   std::thread t([&] {
-    ok = runCrashGuarded([] { (void)recurseForever(0); }, &sig);
+    // Reuse the same thread after each overflow, including a second overflow
+    // to verify that Windows restored the stack guard page.
+    for (int i = 0; i < 2; ++i) {
+      ok[i] = runCrashGuarded([] { (void)recurseForever(0); }, &sig[i]);
+      reused &= runCrashGuarded([&] { ++ran; });
+    }
   });
   t.join();
-  CHECK_FALSE(ok);
-  CHECK(sig == SIGSEGV);
-  // And the thread-pool style reuse: a clean function still runs.
-  int ran = 0;
-  CHECK(runCrashGuarded([&] { ran = 1; }));
-  CHECK(ran == 1);
+  for (int i = 0; i < 2; ++i) {
+    CHECK_FALSE(ok[i]);
+#ifdef _WIN32
+    CHECK(static_cast<DWORD>(sig[i]) == EXCEPTION_STACK_OVERFLOW);
+#else
+    CHECK((sig[i] == SIGSEGV || sig[i] == SIGBUS));
+#endif
+  }
+  CHECK(reused);
+  CHECK(ran == 2);
 }
 
 // ============================================================================
@@ -390,10 +395,10 @@ TEST_CASE("findCallerPaths caps maxDepth 0 at kPathSearchDepthCap",
   CHECK((r.stops & static_cast<unsigned>(StopReason::DepthLimit)) != 0);
 
   // Within the cap the walk still finds the path.
-  auto near = findCallerPaths(graph, "f" + std::to_string(kPathSearchDepthCap),
-                              {"f0"}, limits);
-  REQUIRE(near.paths.size() == 1);
-  CHECK(near.paths[0].hops.size() == kPathSearchDepthCap);
+  auto nearResult = findCallerPaths(
+      graph, "f" + std::to_string(kPathSearchDepthCap), {"f0"}, limits);
+  REQUIRE(nearResult.paths.size() == 1);
+  CHECK(nearResult.paths[0].hops.size() == kPathSearchDepthCap);
 }
 
 TEST_CASE("readLimit clamps before narrowing", "[containment][limits]") {

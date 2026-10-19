@@ -14,15 +14,16 @@
 // limitations under the License.
 
 #include "vycor/callgraph/BuildStats.h"
+#include "vycor/callgraph/CallGraph.h"
 #include "vycor/callgraph/CallGraphBuilder.h"
 #include "vycor/callgraph/CollapseFilter.h"
 #include "vycor/callgraph/ControlFlowIndex.h"
-#include "vycor/callgraph/CallGraph.h"
 #include "vycor/callgraph/CrashGuard.h"
 #include "vycor/callgraph/RetainUntilExit.h"
 #include "vycor/callgraph/UsrIdent.h"
 #include "vycor/compat/CallLoc.h"
 #include "vycor/compat/ClangVersion.h"
+#include "vycor/compat/Path.h"
 #include "vycor/compat/PchCache.h"
 #include "vycor/compat/ToolAdjusters.h"
 
@@ -58,8 +59,8 @@ int runCfToolGuarded(const clang::tooling::CompilationDatabase &compDb,
           },
           &sig)) {
     g_cfCrashCount.fetch_add(1, std::memory_order_relaxed);
-    llvm::errs() << "CRASH (signal " << sig << ") in CF index for " << file
-                 << " — skipping\n";
+    llvm::errs() << "CRASH (" << vycor::crashDescription(sig)
+                 << ") in CF index for " << file << " — skipping\n";
     if (crashSignal)
       *crashSignal = sig;
     return -1;
@@ -91,8 +92,7 @@ vycor::TuOutcome outcomeFor(int status, int crashSignal) {
   case 2:
     return {vycor::TuStatus::Skipped, "no compile command"};
   default:
-    return {vycor::TuStatus::Crashed,
-            "signal " + std::to_string(crashSignal)};
+    return {vycor::TuStatus::Crashed, vycor::crashDescription(crashSignal)};
   }
 }
 
@@ -1000,11 +1000,11 @@ std::vector<FileStamp> openedFiles(clang::SourceManager &sm,
     llvm::SmallString<256> path(entry.getName());
     fm.makeAbsolutePath(path);
     llvm::sys::path::remove_dots(path, /*remove_dot_dot=*/true);
-    if (path == tuPath)
+    if (normalizedPath(path) == normalizedPath(tuPath))
       continue;
     llvm::StringRef real = entry.getFileEntry().tryGetRealPathName();
     FileStamp fs;
-    fs.path = real.empty() ? std::string(path) : std::string(real);
+    fs.path = normalizedPath(real.empty() ? llvm::StringRef(path) : real);
     fs.mtimeNs = static_cast<uint64_t>(entry.getModificationTime()) *
                  1000000000ull;
     fs.size = static_cast<uint64_t>(entry.getSize());

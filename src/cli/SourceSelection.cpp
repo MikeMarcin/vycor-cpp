@@ -16,6 +16,7 @@
 #include "vycor/cli/SourceSelection.h"
 #include "vycor/callgraph/CollapseFilter.h"
 
+#include "vycor/compat/Path.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/FileSystem.h"
@@ -42,7 +43,7 @@ std::string canonical(llvm::StringRef path) {
   llvm::SmallString<256> p(path);
   llvm::sys::fs::make_absolute(p);
   llvm::sys::path::remove_dots(p, /*remove_dot_dot=*/true);
-  return std::string(p.str());
+  return normalizedPath(p);
 }
 
 void appendUnique(std::vector<std::string> &out,

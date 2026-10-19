@@ -21,6 +21,7 @@
 #include "vycor/callgraph/Snapshot.h"
 #include "vycor/query/Tools.h"
 
+#include "vycor/compat/Path.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
@@ -585,9 +586,17 @@ TEST_CASE("query verbs answer from a saved index", "[megascope][cli]") {
   }
 
   SECTION("$VYCOR_INDEX supplies the index when no flag is given") {
+#ifdef _WIN32
+    _putenv_s("VYCOR_INDEX", idx.path.c_str());
+#else
     setenv("VYCOR_INDEX", idx.path.c_str(), 1);
+#endif
     auto r = run({"lookup-function", "--name", "helper"});
+#ifdef _WIN32
+    _putenv_s("VYCOR_INDEX", "");
+#else
     unsetenv("VYCOR_INDEX");
+#endif
     CHECK(r.code == kExitResults);
     CHECK(parseObject(r.out).getString("qualifiedName") == "helper");
   }
@@ -884,7 +893,7 @@ struct ScratchBuildDir {
     llvm::sys::path::append(tmp, "vycor-cli-ephemeral");
     llvm::SmallString<128> made;
     REQUIRE(!llvm::sys::fs::createUniqueDirectory(tmp, made));
-    dir = std::string(made);
+    dir = normalizedPath(made);
     llvm::json::Array entries;
     for (const char *tu : {"main.cpp", "callbacks.cpp"}) {
       llvm::json::Object e;

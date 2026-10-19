@@ -90,8 +90,11 @@ def worker_dirs(tmp: Path) -> list[str]:
 
 
 def children_of(pid: int) -> list[int]:
+    if os.name == "nt":
+        from windows_process import children_of as native_children
+        return native_children(pid)
     out = subprocess.run(["ps", "-A", "-o", "pid=,ppid="],
-                         capture_output=True, text=True).stdout
+                         capture_output=True, text=True, encoding="utf-8").stdout
     kids = []
     for line in out.splitlines():
         parts = line.split()
@@ -102,14 +105,19 @@ def children_of(pid: int) -> list[int]:
 
 def alive(pid: int) -> bool:
     """Running (a zombie waiting for a reaper counts as gone)."""
+    if os.name == "nt":
+        from windows_process import alive as native_alive
+        return native_alive(pid)
     st = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
-                        capture_output=True, text=True).stdout.strip()
+                        capture_output=True, text=True, encoding="utf-8").stdout.strip()
     return bool(st) and not st.startswith("Z")
 
 
 def env_with_tmp(tmp: Path) -> dict[str, str]:
     env = dict(os.environ)
     env["TMPDIR"] = str(tmp)
+    env["TMP"] = str(tmp)
+    env["TEMP"] = str(tmp)
     return env
 
 
@@ -123,7 +131,7 @@ def check_timeout(binary: Path, root: Path, verbose: bool) -> list[str]:
     p = subprocess.run(
         [str(binary), "megascope", "index", "--build-path", str(proj),
          "--index", str(index), "--threads", "2", "--worker-timeout", "2"],
-        capture_output=True, text=True, env=env_with_tmp(tmp), timeout=300)
+        capture_output=True, text=True, encoding="utf-8", env=env_with_tmp(tmp), timeout=300)
     log(verbose, p.stderr)
     took = time.monotonic() - t0
     if p.returncode != 0:
@@ -132,7 +140,7 @@ def check_timeout(binary: Path, root: Path, verbose: bool) -> list[str]:
         errors.append(f"timeout: index took {took:.0f}s")
     info = subprocess.run(
         [str(binary), "megascope", "info", "--index", str(index), "--files"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True, encoding="utf-8", timeout=60)
     status = {Path(f["path"]).name: f["status"]
               for f in json.loads(info.stdout)["files"]}
     if status.get("slow.cpp") != "timeout":
@@ -157,8 +165,9 @@ def check_signal(binary: Path, root: Path, argv: list[str], sig: int,
     index = root / "i.vycs"
     index.write_bytes(sentinel)
     proc = subprocess.Popen(full, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, text=True,
-                            env=env_with_tmp(tmp))
+                            stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                            env=env_with_tmp(tmp),
+                            creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0)
     # Wait until the dispatcher has its directory and workers running.
     workers: list[int] = []
     deadline = time.monotonic() + 60
@@ -173,7 +182,11 @@ def check_signal(binary: Path, root: Path, argv: list[str], sig: int,
         return [f"{name}: no running workers to interrupt: {err}"]
     time.sleep(0.5)  # let the workers get into the parse
     log(verbose, f"{name}: workers {workers}, dirs {worker_dirs(tmp)}")
-    proc.send_signal(sig)
+    if os.name == "nt":
+        from windows_process import send_console
+        send_console(proc.pid, 0 if sig == signal.SIGINT else 1)
+    else:
+        proc.send_signal(sig)
     try:
         _, err = proc.communicate(timeout=30)
     except subprocess.TimeoutExpired:
@@ -182,16 +195,16 @@ def check_signal(binary: Path, root: Path, argv: list[str], sig: int,
         return [f"{name}: still running 30s after the signal"]
     log(verbose, err)
     errors = []
-    if proc.returncode != -sig:
-        errors.append(f"{name}: exit {proc.returncode}, expected death by "
-                      f"signal {sig}")
+    expected = 130 if os.name == "nt" else -sig
+    if proc.returncode != expected:
+        errors.append(f"{name}: exit {proc.returncode}, expected {expected}")
     time.sleep(0.2)
     left = [w for w in workers if alive(w)]
     if left:
         errors.append(f"{name}: workers still running: {left}")
         for w in left:
             try:
-                os.kill(w, signal.SIGKILL)
+                os.kill(w, signal.SIGTERM if os.name == "nt" else signal.SIGKILL)
             except OSError:
                 pass
     if worker_dirs(tmp):

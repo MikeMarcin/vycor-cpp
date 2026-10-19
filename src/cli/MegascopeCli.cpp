@@ -24,11 +24,13 @@
 
 #include "clang/Tooling/CompilationDatabase.h"
 
+#include "vycor/compat/Path.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/Process.h"
 
 #include <algorithm>
 #include <chrono>
@@ -47,7 +49,7 @@ std::string defaultIndexPath(llvm::StringRef buildPath) {
   llvm::SmallString<256> p(buildPath.empty() ? llvm::StringRef(".")
                                              : buildPath);
   llvm::sys::path::append(p, ".vycor", "megascope.vycs");
-  return p.str().str();
+  return normalizedPath(p);
 }
 
 std::string resolveIndexPath(llvm::StringRef explicitIndex,
@@ -1267,8 +1269,8 @@ int runMegascopeQueryVerb(llvm::ArrayRef<std::string> args,
              "in-memory bake); a saved index carries its own\n";
       return kExitUsage;
     }
-    const char *envIndex = std::getenv("VYCOR_INDEX");
-    indexPath = resolveIndexPath(common->index, envIndex ? envIndex : "",
+    auto envIndex = llvm::sys::Process::GetEnv("VYCOR_INDEX");
+    indexPath = resolveIndexPath(common->index, envIndex.value_or(""),
                                  common->buildPath);
     if (!llvm::sys::fs::exists(indexPath)) {
       err << "megascope: no index at " << indexPath

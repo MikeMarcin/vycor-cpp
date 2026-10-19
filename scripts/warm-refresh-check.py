@@ -142,7 +142,7 @@ class Check:
 
     def megascope(self, argv: list[str], cwd: Path) -> tuple[int, str, str]:
         p = subprocess.run([str(self.binary), "megascope", *argv],
-                           capture_output=True, text=True, cwd=cwd)
+                           capture_output=True, text=True, encoding="utf-8", cwd=cwd)
         if self.verbose:
             print(f"$ megascope {' '.join(argv)} -> {p.returncode}",
                   file=sys.stderr)

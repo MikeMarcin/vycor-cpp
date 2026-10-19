@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -114,14 +115,14 @@ QUERIES: list[tuple[str, list[str], str | None, bool]] = [
       "{callsite:Pipeline::run->stage1_ingest}", "--format", "ndjson"],
      None, True),
     ("analyze-dead-code",
-     ["analyze-dead-code", "--format", "ndjson"], None, True),
+     ["analyze-dead-code", "--file-prefix", "{fixture}", "--format", "ndjson"], None, True),
     ("get-class-hierarchy",
      ["get-class-hierarchy", "--class-name", "Plugin"], None, True),
     ("dump", ["dump"], None, True),
     ("dump-json", ["dump", "--format", "json"], None, True),
     ("batch", ["batch"],
      '{"id":1,"tool":"get_callers","args":{"name":"stage2_parse"}}\n'
-     '{"id":2,"tool":"lookup_function","args":{"name":"nope"}}\n'
+     '{"id":2,"tool":"lookup_function","args":{"name":"zyxwvutsrqponmlkjihgfedcba"}}\n'
      '{"id":3,"tool":"no_such_tool","args":{}}\n', True),
     ("not-found", ["get-callers", "--name", "does_not_exist"], None, True),
     ("not-found-suggests",
@@ -171,7 +172,7 @@ VOLATILE_KEYS = {
     "functionsBefore", "functionsAfter", "relationshipsBefore",
     "relationshipsAfter",
 }
-PATH_RE = re.compile(r'"/[^"]*"')
+PATH_RE = re.compile(r'"(?:/|[A-Za-z]:/)[^"]*"')
 # Standard-library USRs spell out template signatures that shift between
 # standard-library versions; display names do not. Records that name a
 # system-header location are dropped outright (which declarations a
@@ -196,23 +197,46 @@ def write_compile_commands(build: Path) -> None:
                                                             indent=1))
 
 
+def host_context(v):
+    # MSVC's headers also have presumed locations such as :101:1 (intrinsics
+    # under #line), so an absolute-path regex alone cannot identify them.
+    return (isinstance(v, dict) and "callerNoexcept" in v
+            and not v.get("callSite", "").startswith("{fixture}/"))
+
+
 def scrub(v):
     if isinstance(v, dict):
-        return {k: scrub(x) for k, x in v.items() if k not in VOLATILE_KEYS}
+        result = {k: scrub(x) for k, x in v.items() if k not in VOLATILE_KEYS}
+        if "callSites" in result and "callSiteCount" in result:
+            result["callSiteCount"] = len(result["callSites"])
+        return result
     if isinstance(v, list):
-        return [scrub(x) for x in v]
+        return [scrub(x) for x in v if not host_context(x)]
     return v
 
 
 def normalize(text: str, subs: list[tuple[str, str]]) -> list[str]:
     out = []
     for line in text.splitlines():
+        if os.name == "nt":
+            # Normalize JSON-escaped and plain native separators before path
+            # substitution; keep actual facts and declaration identities.
+            line = line.replace("\\\\", "/")
+            subs = [(real.replace("\\", "/"), placeholder) for real, placeholder in subs]
+        # MSVC implements std::function::operator() in a base class. These
+        # two fixture signatures denote the same public standard operation.
+        line = line.replace("std::_Func_class<int, int>::operator()", "std::function<int (int)>::operator()")
+        line = line.replace("std::_Func_class<void, State &>::operator()", "std::function<void (State &)>::operator()")
+        # libc++ inline namespace is an ABI detail, including in parameter USRs.
+        line = line.replace("@N@std@N@__1@", "@N@std@")
         for real, placeholder in subs:
             line = line.replace(real, placeholder)
         try:
             v = json.loads(line)
         except ValueError:
             out.append(BAKE_RE.sub('"bake": "<bake>"', line))
+            continue
+        if host_context(v):
             continue
         if isinstance(v, dict) and "_summary" in v:
             # Counts here may include toolchain records dropped below.
@@ -233,7 +257,7 @@ def normalize(text: str, subs: list[tuple[str, str]]) -> list[str]:
 def run_megascope(binary: Path, argv: list[str], stdin: str | None,
                   cwd: Path) -> tuple[int, str, str]:
     p = subprocess.run([str(binary), "megascope", *argv], input=stdin,
-                       capture_output=True, text=True, cwd=cwd)
+                       capture_output=True, text=True, encoding="utf-8", cwd=cwd)
     return p.returncode, p.stdout, p.stderr
 
 

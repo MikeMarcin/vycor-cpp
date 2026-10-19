@@ -17,6 +17,7 @@
 
 #include "vycor/cli/SourceSelection.h"
 
+#include "vycor/compat/Path.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
@@ -30,6 +31,11 @@
 using namespace vycor;
 
 namespace {
+#ifdef _WIN32
+const std::string kAbsolutePrefix = "C:/x/";
+#else
+const std::string kAbsolutePrefix = "/x/";
+#endif
 
 /// A compilation database whose only job is to answer getAllFiles().
 class FilesDb : public clang::tooling::CompilationDatabase {
@@ -82,7 +88,7 @@ struct Tree {
   std::string at(llvm::StringRef rel) const {
     llvm::SmallString<128> p(root);
     llvm::sys::path::append(p, rel);
-    return std::string(p.str());
+    return normalizedPath(p);
   }
   /// What a compilation database would list: the sources, a duplicate
   /// (multi-config databases), an assembly file, and a deleted file.
@@ -198,7 +204,8 @@ TEST_CASE("explicit files and list files are unioned, canonicalized, and "
           "[source-selection]") {
   Tree tree;
   SourceSelection sel;
-  sel.explicitFiles = {"/x/one.cpp", "/x/two.cpp"};
+  sel.explicitFiles = {kAbsolutePrefix + "one.cpp",
+                       kAbsolutePrefix + "two.cpp"};
 
   SECTION("explicit only: the database is not consulted") {
     SourceSelectionStats stats;
@@ -208,32 +215,37 @@ TEST_CASE("explicit files and list files are unioned, canonicalized, and "
 
   SECTION("--source-list from a file, comments and blanks ignored") {
     std::string list =
-        writeTempList("# header\n/x/two.cpp\n\n  /x/three.cpp  \n");
+        writeTempList("# header\n" + kAbsolutePrefix + "two.cpp\n\n  " +
+                      kAbsolutePrefix + "three.cpp  \n");
     sel.listFile = list;
     auto files = select(tree, sel);
     std::remove(list.c_str());
-    CHECK(files == std::vector<std::string>{"/x/one.cpp", "/x/two.cpp",
-                                            "/x/three.cpp"});
+    CHECK(files == std::vector<std::string>{kAbsolutePrefix + "one.cpp",
+                                            kAbsolutePrefix + "two.cpp",
+                                            kAbsolutePrefix + "three.cpp"});
   }
 
   SECTION("relative and dotted spellings collapse onto one TU") {
     llvm::SmallString<128> cwd;
     REQUIRE_FALSE(llvm::sys::fs::current_path(cwd));
     SourceSelection dotted;
-    dotted.explicitFiles = {"/x/../x/one.cpp", "rel/./two.cpp",
-                            "/x/one.cpp"};
+    dotted.explicitFiles = {kAbsolutePrefix + "../x/one.cpp", "rel/./two.cpp",
+                            kAbsolutePrefix + "one.cpp"};
     auto files = select(tree, dotted);
-    std::string relAbs = std::string(cwd.str()) + "/rel/two.cpp";
-    CHECK(files == std::vector<std::string>{"/x/one.cpp", relAbs});
+    std::string relAbs = normalizedPath(cwd) + "/rel/two.cpp";
+    CHECK(files ==
+          std::vector<std::string>{kAbsolutePrefix + "one.cpp", relAbs});
   }
 
   SECTION("--source-list - reads stdin") {
     SourceSelection fromStdin;
     fromStdin.listFile = "-";
     fromStdin.regex = "two|three";
-    auto files =
-        select(tree, fromStdin, "/x/one.cpp\n/x/two.cpp\n/x/three.cpp\n");
-    CHECK(files == std::vector<std::string>{"/x/two.cpp", "/x/three.cpp"});
+    auto files = select(tree, fromStdin,
+                        kAbsolutePrefix + "one.cpp\n" + kAbsolutePrefix +
+                            "two.cpp\n" + kAbsolutePrefix + "three.cpp\n");
+    CHECK(files == std::vector<std::string>{kAbsolutePrefix + "two.cpp",
+                                            kAbsolutePrefix + "three.cpp"});
   }
 
   SECTION("a missing list file is an error with the OS reason") {

@@ -19,6 +19,7 @@
 #include "vycor/anneal/Analyzer.h"
 #include "vycor/anneal/GlobalIndex.h"
 
+#include "vycor/compat/Path.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
@@ -43,7 +44,7 @@ namespace {
   llvm::SmallString<128> made;
   if (llvm::sys::fs::createUniqueDirectory(dir, made))
     return false;
-  dir = std::string(made);
+  dir = normalizedPath(made);
   return true;
 }
 
@@ -60,7 +61,7 @@ struct SpecDivergenceFixture {
     REQUIRE(makeUniqueFixtureDir(dir));
     llvm::SmallString<256> abs;
     REQUIRE(!llvm::sys::fs::real_path(dir, abs));
-    absDir = std::string(abs.str());
+    absDir = normalizedPath(abs);
 
     write("sdk.h", R"cpp(
 #pragma once
@@ -186,7 +187,7 @@ TEST_CASE("End-to-end: noexcept(MACRO) resolving differently per compile "
   REQUIRE(makeUniqueFixtureDir(dir));
   llvm::SmallString<256> abs;
   REQUIRE(!llvm::sys::fs::real_path(dir, abs));
-  const std::string absDir(abs.str());
+  const std::string absDir = normalizedPath(abs);
 
   auto write = [&](const std::string &name, const std::string &content) {
     std::ofstream out(dir + "/" + name, std::ios::binary | std::ios::trunc);

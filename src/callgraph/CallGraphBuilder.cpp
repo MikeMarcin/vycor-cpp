@@ -48,8 +48,8 @@ int runToolGuarded(const clang::tooling::CompilationDatabase &compDb,
           },
           &sig)) {
     g_crashCount.fetch_add(1, std::memory_order_relaxed);
-    llvm::errs() << "CRASH (signal " << sig << ") processing " << file
-                 << " — skipping\n";
+    llvm::errs() << "CRASH (" << vycor::crashDescription(sig) << ") processing "
+                 << file << " — skipping\n";
     return -1;
   }
   return status;

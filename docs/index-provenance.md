@@ -89,7 +89,7 @@ bake, recorded as `IndexProvenance::environment`:
 | schema constant | changes when the hashed field set changes |
 | analyzer identity | `vycor-cpp <version>, index format <N>` (`analyzerIdentity()`) |
 | toolchain identity | `LLVM <version>` (`toolchainIdentity()`) |
-| compiled-in resource directory | `VYCOR_CLANG_RESOURCE_DIR` |
+| resolved resource directory | adjacent installed headers on Windows, otherwise `VYCOR_CLANG_RESOURCE_DIR` |
 | compiled-in default sysroot | `VYCOR_DEFAULT_SYSROOT` |
 | detected GCC installation | `detectUsableGccInstallDir()` (the dir the tool would inject) |
 | `--sysroot` | as given (empty = compiled default) |

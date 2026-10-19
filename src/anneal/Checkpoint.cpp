@@ -674,7 +674,7 @@ AnnealCheckpoint::open(const std::string &path, uint64_t optionsFingerprint) {
   // would land behind it where no later load could reach them.
   bool reuse = false;
   uint64_t validEnd = 0, fileSize = 0;
-  if (auto bufOrErr = llvm::MemoryBuffer::getFile(path)) {
+  if (auto bufOrErr = llvm::MemoryBuffer::getFile(path, /*IsText=*/false)) {
     const auto &buf = *bufOrErr.get();
     fileSize = buf.getBufferSize();
     if (buf.getBufferSize() >= kHeaderSize &&
@@ -1002,7 +1002,7 @@ bool writeShardFile(const std::string &path, const char magic[4],
 bool readShardFile(
     const std::string &path, const char magic[4],
     const std::function<bool(const std::string &tu, Reader &r)> &fn) {
-  auto bufOrErr = llvm::MemoryBuffer::getFile(path);
+  auto bufOrErr = llvm::MemoryBuffer::getFile(path, /*IsText=*/false);
   if (!bufOrErr)
     return false;
   const auto &buf = *bufOrErr.get();

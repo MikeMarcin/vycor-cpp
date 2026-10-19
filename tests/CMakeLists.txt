@@ -63,7 +63,12 @@ file(GLOB VYCOR_EXT_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/ext/*.cpp")
 file(GLOB VYCOR_EXT_TEST_SOURCES CONFIGURE_DEPENDS
      "${CMAKE_SOURCE_DIR}/ext/tests/*.cpp")
 
+add_executable(vycor_worker_helper worker_helper.cpp ${VYCOR_SANITIZER_SOURCES})
+target_link_libraries(vycor_worker_helper PRIVATE vycor_lib)
+target_compile_options(vycor_worker_helper PRIVATE ${VYCOR_WARNING_FLAGS})
+
 add_executable(vycor_tests
+  test_platform_io.cpp
   test_matcher_engine.cpp
   test_rules_parser.cpp
   test_transforms.cpp
@@ -118,7 +123,11 @@ target_compile_options(vycor_tests PRIVATE ${VYCOR_WARNING_FLAGS})
 
 target_compile_definitions(vycor_tests PRIVATE
   PROJECT_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+  VYCOR_TEST_WORKER="$<TARGET_FILE:vycor_worker_helper>"
+  VYCOR_TEST_EXE_SUFFIX="${CMAKE_EXECUTABLE_SUFFIX}"
 )
+
+add_dependencies(vycor_tests vycor_worker_helper)
 
 include(Catch)
 # The [crash-guard] tests crash a parse on purpose; under LeakSanitizer the
@@ -204,4 +213,11 @@ if(Python3_Interpreter_FOUND)
                        TIMEOUT 900)
 else()
   message(STATUS "python3 not found: the cli_golden test is not registered")
+endif()
+
+if(WIN32 AND Python3_Interpreter_FOUND)
+  add_test(NAME windows_worker_lifecycle
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/windows-worker-check.py
+            --helper $<TARGET_FILE:vycor_worker_helper>)
+  set_tests_properties(windows_worker_lifecycle PROPERTIES TIMEOUT 120 LABELS "cli;containment;windows")
 endif()

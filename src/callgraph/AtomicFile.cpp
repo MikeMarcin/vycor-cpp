@@ -29,7 +29,9 @@
 #include <sys/file.h>
 #include <unistd.h>
 #else
+#include "vycor/compat/WindowsSupport.h"
 #include "llvm/Support/Process.h"
+#include <io.h>
 #endif
 
 namespace vycor {
@@ -98,11 +100,23 @@ bool writeFileAtomically(const std::string &path,
       std::string msg = "cannot write " + tmp + ": " + os.error().message();
       // An uncleared stream error is a fatal error in the destructor.
       os.clear_error();
+      os.close();
+      os.clear_error();
       return fail(msg);
     }
 #ifndef _WIN32
     if (durable && ::fsync(fd) != 0) {
       std::string msg = "cannot sync " + tmp + ": " + std::strerror(errno);
+      os.close();
+      os.clear_error();
+      return fail(msg);
+    }
+#else
+    if (durable &&
+        !FlushFileBuffers(reinterpret_cast<HANDLE>(_get_osfhandle(fd)))) {
+      std::string msg = "cannot sync " + tmp + ": " + windowsError();
+      os.close();
+      os.clear_error();
       return fail(msg);
     }
 #endif
@@ -114,8 +128,44 @@ bool writeFileAtomically(const std::string &path,
     }
   }
 
+#ifdef _WIN32
+  // LLVM's Windows rename fallback moves an open/mapped destination aside
+  // first, exposing a missing path and losing the old name if the second
+  // rename fails. FileRenameInfoEx replaces it in one operation, including
+  // mapped readers with FILE_SHARE_DELETE. Fail closed on unsupported FSes.
+  llvm::SmallString<256> absolute(path);
+  if (auto ec = llvm::sys::fs::make_absolute(absolute))
+    return fail("cannot resolve " + path + ": " + ec.message());
+  std::wstring from, to;
+  if (!windowsUtf16(tmp, from) || !windowsUtf16(absolute, to))
+    return fail("cannot encode rename path: " + windowsError());
+  const size_t bytes =
+      offsetof(FILE_RENAME_INFO, FileName) + (to.size() + 1) * sizeof(wchar_t);
+  // Win32 resolves the name as a NUL-terminated DOS path before issuing
+  // the length-delimited NT rename. Keep the terminator outside FileNameLength.
+  std::vector<unsigned char> storage(bytes, 0);
+  auto *rename = reinterpret_cast<FILE_RENAME_INFO *>(storage.data());
+  rename->Flags =
+      FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS;
+  rename->RootDirectory = nullptr;
+  rename->FileNameLength = static_cast<DWORD>(to.size() * sizeof(wchar_t));
+  std::memcpy(rename->FileName, to.data(), rename->FileNameLength);
+  std::string renameError;
+  {
+    WindowsHandle file(
+        CreateFileW(from.c_str(), DELETE | GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (!file || !SetFileInformationByHandle(file.get(), FileRenameInfoEx,
+                                             rename, static_cast<DWORD>(bytes)))
+      renameError = windowsError();
+  }
+  if (!renameError.empty())
+    return fail("cannot atomically replace " + path + ": " + renameError);
+#else
   if (std::error_code ec = llvm::sys::fs::rename(tmp, path))
     return fail("cannot rename " + tmp + " to " + path + ": " + ec.message());
+#endif
   if (durable)
     syncDirectory(dir);
   return true;
@@ -210,8 +260,17 @@ std::unique_ptr<IndexWriteLock> IndexWriteLock::acquire(
   }
   return lock;
 #else
-  if (!llvm::sys::fs::tryLockFile(lock->fd_))
+  OVERLAPPED overlapped{};
+  HANDLE handle = reinterpret_cast<HANDLE>(_get_osfhandle(lock->fd_));
+  if (LockFileEx(handle, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0,
+                 MAXDWORD, MAXDWORD, &overlapped))
     return lock;
+  DWORD lockError = GetLastError();
+  if (lockError != ERROR_LOCK_VIOLATION) {
+    setError(error,
+             "cannot lock " + lock->lockPath_ + ": " + windowsError(lockError));
+    return nullptr;
+  }
   if (!wait) {
     setError(error, lock->lockPath_ + " is held by another writer");
     if (busy)

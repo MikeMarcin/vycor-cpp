@@ -17,12 +17,16 @@
 #define VYCOR_COMPAT_TOOL_ADJUSTERS_H
 
 #include "vycor/compat/PchCache.h"
+#include "vycor/compat/ResourceDir.h"
 
-#include "clang/Tooling/Tooling.h"
 #include "clang/Tooling/ArgumentsAdjusters.h"
+#include "clang/Tooling/Tooling.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/Process.h"
+#include "llvm/Support/StringSaver.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include <algorithm>
 #include <cstdlib>
@@ -34,7 +38,7 @@ namespace vycor {
 
 /// Process-global extra compiler arguments appended to the end of every
 /// compile command by makeClangTool(). Seeded from the VYCOR_EXTRA_ARGS
-/// environment variable (whitespace-separated) so test binaries inherit
+/// environment variable (native command-line quoting) so test binaries inherit
 /// host-toolchain fixes too, then extended by the CLI (--extra-arg). These
 /// describe the machine/toolchain the tool runs on (e.g.
 /// --gcc-install-dir=... on hosts whose newest /usr/lib/gcc directory lacks
@@ -44,20 +48,17 @@ namespace vycor {
 inline std::vector<std::string> &globalExtraArgs() {
   static std::vector<std::string> args = [] {
     std::vector<std::string> seed;
-    if (const char *env = std::getenv("VYCOR_EXTRA_ARGS")) {
-      std::string cur;
-      for (const char *p = env;; ++p) {
-        if (*p == '\0' || *p == ' ' || *p == '\t') {
-          if (!cur.empty()) {
-            seed.push_back(cur);
-            cur.clear();
-          }
-          if (*p == '\0')
-            break;
-        } else {
-          cur.push_back(*p);
-        }
-      }
+    if (auto env = llvm::sys::Process::GetEnv("VYCOR_EXTRA_ARGS")) {
+      llvm::BumpPtrAllocator allocator;
+      llvm::StringSaver saver(allocator);
+      llvm::SmallVector<const char *, 16> tokens;
+#ifdef _WIN32
+      llvm::cl::TokenizeWindowsCommandLine(*env, saver, tokens);
+#else
+      llvm::cl::TokenizeGNUCommandLine(*env, saver, tokens);
+#endif
+      for (const char *token : tokens)
+        seed.emplace_back(token);
     }
     return seed;
   }();
@@ -82,10 +83,8 @@ getStripIncompatibleFlagsAdjuster(bool stripPch = true) {
                     llvm::StringRef /*filename*/) {
     // Flags to remove outright.
     static const char *const StripFlags[] = {
-        "-gmodules",
-        "-fmodules",
-        "-fcxx-modules",
-        "-Werror",
+        "-gmodules", "-fmodules", "-fcxx-modules", "-Werror",
+        "/WX",       "-WX", // cl/clang-cl spelling of warnings-as-errors
     };
     // Flags whose *next* argument should also be removed.
     // -include-pch is only stripped when stripPch is true.
@@ -188,17 +187,16 @@ inline clang::tooling::ArgumentsAdjuster getResourceDirAdjuster() {
     for (const auto &a : args)
       if (a.find("-resource-dir") == 0)
         return args;
-#ifdef VYCOR_CLANG_RESOURCE_DIR
+    const auto &resource = clangResourceDir();
+    if (resource.empty())
+      return args;
     auto result = args;
     // Use space-separated form: -resource-dir= (Joined) lacks CC1Option
     // visibility in LLVM 21, so ClangTool's internal cc1 pipeline rejects it.
     // The Separate form has CC1Option and works in both driver and cc1 modes.
     result.push_back("-resource-dir");
-    result.push_back(VYCOR_CLANG_RESOURCE_DIR);
+    result.push_back(resource);
     return result;
-#else
-    return args;
-#endif
   };
 }
 
@@ -339,7 +337,9 @@ getPchCacheAdjuster(const PchCache &cache) {
 
       // Handle standalone -include<pch> (joined or separate).
       if (arg.starts_with("-include") && !arg.starts_with("-include-pch") &&
-          arg.contains("pch")) {
+          (arg.contains("pch") ||
+           (arg == "-include" && i + 1 < args.size() &&
+            llvm::StringRef(args[i + 1]).contains("pch")))) {
         std::string pchSrc;
         if (arg.size() > 8) {
           pchSrc = arg.substr(8).str();

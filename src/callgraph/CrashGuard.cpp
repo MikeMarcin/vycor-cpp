@@ -15,17 +15,29 @@
 
 #include "vycor/callgraph/CrashGuard.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/CrashRecoveryContext.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #include <memory>
 #include <mutex>
 
+#ifdef _WIN32
+#include "vycor/compat/WindowsSupport.h"
+#include <malloc.h>
+#else
 #include <signal.h>
+#endif
 
 namespace vycor {
 
 namespace {
 
+std::mutex g_scopeMutex;
+unsigned g_scopeCount = 0;
+bool g_disabled = false;
+
+#ifndef _WIN32
 // The signals llvm::CrashRecoveryContext handles on Unix.
 constexpr int kGuardedSignals[] = {SIGABRT, SIGBUS, SIGFPE,
                                    SIGILL,  SIGSEGV, SIGTRAP};
@@ -33,10 +45,6 @@ constexpr int kGuardedSignals[] = {SIGABRT, SIGBUS, SIGFPE,
 // Large enough for CrashRecoveryContext's handler (which only unblocks the
 // signal and longjmps) with generous headroom.
 constexpr size_t kAltStackSize = 256 * 1024;
-
-std::mutex g_scopeMutex;
-unsigned g_scopeCount = 0;
-bool g_disabled = false;
 
 /// CrashRecoveryContext installs its handlers without SA_ONSTACK, so a
 /// stack overflow would fault again inside the handler. Re-install the
@@ -88,6 +96,7 @@ struct AltStack {
 };
 
 thread_local AltStack tl_altStack;
+#endif
 
 } // namespace
 
@@ -102,7 +111,9 @@ CrashGuardScope::CrashGuardScope() {
   std::lock_guard<std::mutex> lock(g_scopeMutex);
   if (g_scopeCount++ == 0 && !g_disabled) {
     llvm::CrashRecoveryContext::Enable();
+#ifndef _WIN32
     runHandlersOnAltStack();
+#endif
   }
 }
 
@@ -113,14 +124,37 @@ CrashGuardScope::~CrashGuardScope() {
 }
 
 bool runCrashGuarded(llvm::function_ref<void()> fn, int *signalOut) {
+#ifdef _WIN32
+  ULONG guarantee = 64 * 1024;
+  if (!SetThreadStackGuarantee(&guarantee))
+    llvm::report_fatal_error("cannot reserve stack for crash recovery");
+#else
   tl_altStack.ensure();
+#endif
   llvm::CrashRecoveryContext crc;
   if (crc.RunSafely(fn))
     return true;
-  // On Unix a crash's RetCode is 128 + the signal number.
+#ifdef _WIN32
+  // SEH reports the exception code directly. Reset the guard page before a
+  // pool thread is reused after a stack overflow; never resume on failure.
+  if (static_cast<DWORD>(crc.RetCode) == EXCEPTION_STACK_OVERFLOW &&
+      !_resetstkoflw())
+    llvm::report_fatal_error("cannot restore stack after overflow");
+  if (signalOut)
+    *signalOut = crc.RetCode;
+#else
   if (signalOut)
     *signalOut = crc.RetCode > 128 ? crc.RetCode - 128 : crc.RetCode;
+#endif
   return false;
+}
+
+std::string crashDescription(int code) {
+#ifdef _WIN32
+  return "exception 0x" + llvm::utohexstr(static_cast<uint32_t>(code));
+#else
+  return "signal " + std::to_string(code);
+#endif
 }
 
 } // namespace vycor

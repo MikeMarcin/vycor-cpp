@@ -32,10 +32,10 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
 
+#include "llvm/Support/Process.h"
 #include <fstream>
 #include <map>
 #include <string>
-#include <unistd.h>
 #include <vector>
 
 using namespace vycor;
@@ -61,7 +61,7 @@ std::string writeTemp(const std::string &code) {
   int fd = -1;
   auto ec = llvm::sys::fs::createTemporaryFile("vycor_paths", "cpp", fd, tmp);
   REQUIRE_FALSE(ec);
-  ::close(fd);
+  llvm::sys::Process::SafelyCloseFileDescriptor(fd);
   std::ofstream out(std::string(tmp.str()));
   out << code;
   return std::string(tmp.str());

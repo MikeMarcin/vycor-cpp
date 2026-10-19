@@ -104,6 +104,8 @@ else()
     "or initialize the submodule: git submodule update --init")
 endif()
 
+include(cmake/WindowsLLVM.cmake)
+
 # Match LLVM's RTTI setting (off by default) to avoid linker errors
 if(NOT LLVM_ENABLE_RTTI)
   if(MSVC)
@@ -120,7 +122,11 @@ endif()
 # builds, but CI turns it ON — warnings fail the merge gate, not the user.
 option(VYCOR_WERROR "Treat compiler warnings as errors (CI default)" OFF)
 if(MSVC)
-  set(VYCOR_WARNING_FLAGS /W4)
+  set(VYCOR_WARNING_FLAGS /W4 /bigobj /utf-8)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # Same aggregate-initialization convention as the Unix warning flags.
+    list(APPEND VYCOR_WARNING_FLAGS -Wno-missing-field-initializers)
+  endif()
   if(VYCOR_WERROR)
     list(APPEND VYCOR_WARNING_FLAGS /WX)
   endif()

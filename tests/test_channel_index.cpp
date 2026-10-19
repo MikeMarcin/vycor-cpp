@@ -28,13 +28,13 @@
 
 #include "SnapshotBytes.h"
 
+#include "llvm/Support/Process.h"
 #include <algorithm>
-#include <chrono>
-#include <iterator>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <clang/Tooling/CompilationDatabase.h>
 #include <fstream>
-#include <unistd.h>
+#include <iterator>
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
@@ -196,7 +196,7 @@ std::string writeTempSource(const std::string &code) {
   auto ec = llvm::sys::fs::createTemporaryFile("vycor_channel", "cpp", fd, tmp);
   if (ec)
     return {};
-  ::close(fd);
+  llvm::sys::Process::SafelyCloseFileDescriptor(fd);
   std::ofstream out(std::string(tmp.str()));
   out << code;
   out.close();

@@ -17,6 +17,7 @@
 
 #include "llvm/ADT/STLFunctionalExtras.h"
 
+#include <cstdint>
 #include <string>
 
 namespace vycor {
@@ -37,7 +38,11 @@ namespace vycor {
 //
 // Workers undo the inherited mask and bind their lifetime to the parent
 // (bindWorkerToParent): SIGKILL on parent death on Linux
-// (PR_SET_PDEATHSIG), a parent-pid poll elsewhere.
+// (PR_SET_PDEATHSIG), a parent-pid poll on other Unix systems.
+// On Windows, console control events wake an event-based watcher; jobs
+// terminate whole worker trees before cleanup, and closing the parent's job
+// handles binds their lifetime to the parent. See docs/windows-build.md for
+// exit codes and forced-termination limitations.
 // ============================================================================
 
 /// Install the watcher. Call once, from main(), before any other thread is
@@ -77,10 +82,12 @@ private:
 namespace detail {
 /// Child tracking for runWorkerProcess. `spawn` runs under the registry
 /// lock so the watcher never misses a child spawned concurrently with the
-/// signal; it returns the new pid (<= 0 on failure). Returns 0 without
+/// event; it returns the new pid/job handle (0 on failure). Returns 0 without
 /// calling `spawn` once an interrupt was requested.
-long spawnTrackedChild(llvm::function_ref<long()> spawn);
-void untrackChild(long pid);
+using ChildId =
+    intptr_t; // POSIX pid or Windows job handle; never narrow a HANDLE.
+ChildId spawnTrackedChild(llvm::function_ref<ChildId()> spawn);
+void untrackChild(ChildId child);
 } // namespace detail
 
 } // namespace vycor

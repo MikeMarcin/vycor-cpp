@@ -87,11 +87,7 @@ std::string environmentFingerprint(const BakeEnvironment &env) {
   h.u64(kFingerprintSchema);
   h.str(analyzerIdentity());
   h.str(toolchainIdentity());
-#ifdef VYCOR_CLANG_RESOURCE_DIR
-  h.str(VYCOR_CLANG_RESOURCE_DIR);
-#else
-  h.str("");
-#endif
+  h.str(clangResourceDir());
 #ifdef VYCOR_DEFAULT_SYSROOT
   h.str(VYCOR_DEFAULT_SYSROOT);
 #else

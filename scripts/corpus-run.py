@@ -224,20 +224,37 @@ def run_measured(argv: list[str], cwd: Path, stdin: str | None = None):
     with tempfile.TemporaryFile() as err:
         p = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.PIPE
                              if stdin is not None else subprocess.DEVNULL,
-                             stdout=subprocess.PIPE, stderr=err, text=True)
+                             stdout=subprocess.PIPE, stderr=err, text=True, encoding="utf-8")
         if stdin is not None:
             p.stdin.write(stdin)
             p.stdin.close()
         out = p.stdout.read()
         p.stdout.close()
-        _, status, ru = os.wait4(p.pid, 0)
-        p.returncode = (-os.WTERMSIG(status) if os.WIFSIGNALED(status)
-                        else os.WEXITSTATUS(status))
+        if os.name == "nt":
+            p.wait()
+            import ctypes
+            from ctypes import wintypes
+            class MemoryCounters(ctypes.Structure):
+                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
+                    (name, ctypes.c_size_t) for name in (
+                        "PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage",
+                        "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage",
+                        "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage")]
+            counters = MemoryCounters()
+            counters.cb = ctypes.sizeof(counters)
+            query = ctypes.WinDLL("psapi", use_last_error=True).GetProcessMemoryInfo
+            query.argtypes = [wintypes.HANDLE, ctypes.POINTER(MemoryCounters), wintypes.DWORD]
+            if not query(int(p._handle), ctypes.byref(counters), counters.cb):
+                raise ctypes.WinError(ctypes.get_last_error())
+            rss_kb = counters.PeakWorkingSetSize // 1024
+        else:
+            _, status, ru = os.wait4(p.pid, 0)
+            p.returncode = (-os.WTERMSIG(status) if os.WIFSIGNALED(status)
+                            else os.WEXITSTATUS(status))
+            rss_kb = ru.ru_maxrss if platform.system() != "Darwin" else ru.ru_maxrss // 1024
         wall = (time.perf_counter() - t0) * 1000.0
         err.seek(0)
         stderr = err.read().decode(errors="replace")
-    rss_kb = ru.ru_maxrss if platform.system() != "Darwin" \
-        else ru.ru_maxrss // 1024
     return p.returncode, out, stderr, wall, rss_kb
 
 
@@ -440,7 +457,7 @@ class Runner:
 def git(*args: str) -> str:
     try:
         return subprocess.run(["git", *args], cwd=ROOT, capture_output=True,
-                              text=True, check=True).stdout.strip()
+                              text=True, encoding="utf-8", check=True).stdout.strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
         return ""
 
@@ -448,7 +465,7 @@ def git(*args: str) -> str:
 def toolchain(binary: Path) -> str:
     try:
         p = subprocess.run([str(binary), "--version"], capture_output=True,
-                           text=True)
+                           text=True, encoding="utf-8")
         return (p.stdout or p.stderr).strip()
     except OSError as e:
         return f"unavailable: {e}"

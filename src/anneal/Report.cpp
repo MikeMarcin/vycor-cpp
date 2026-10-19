@@ -18,8 +18,10 @@
 #include "vycor/anneal/CheckSet.h"
 #include "vycor/callgraph/AtomicFile.h"
 
+#include "vycor/compat/Path.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -304,19 +306,26 @@ std::string absolutePath(llvm::StringRef path, llvm::StringRef base) {
   if (path.empty())
     return "";
   llvm::SmallString<256> abs(path);
-  if (!llvm::sys::path::is_absolute(abs)) {
+  if (!llvm::sys::path::is_absolute(abs) &&
+      !llvm::sys::path::has_root_directory(abs)) {
     llvm::SmallString<256> joined(base);
     llvm::sys::path::append(joined, path);
     abs = joined;
   }
   llvm::sys::path::remove_dots(abs, /*remove_dot_dot=*/true);
-  return std::string(abs);
+  llvm::SmallString<256> physical;
+  if (!llvm::sys::fs::real_path(abs, physical))
+    return normalizedPath(physical);
+  return normalizedPath(abs);
 }
 
 std::string relativeToRoot(llvm::StringRef path, llvm::StringRef root) {
   if (root.empty() || path.empty())
     return path.str();
-  llvm::StringRef r = root;
+  const std::string normalized = normalizedPath(path);
+  const std::string normalizedRoot = normalizedPath(root);
+  path = normalized;
+  llvm::StringRef r = normalizedRoot;
   while (r.size() > 1 && r.ends_with("/"))
     r = r.drop_back();
   if (path == r)
@@ -649,7 +658,8 @@ namespace {
 bool patchPathMatches(llvm::StringRef patchFile, llvm::StringRef absPath) {
   llvm::SmallString<256> p(patchFile);
   llvm::sys::path::remove_dots(p, /*remove_dot_dot=*/true);
-  llvm::StringRef rel = p;
+  const std::string normalized = normalizedPath(p);
+  llvm::StringRef rel = normalized;
   if (rel.empty())
     return false;
   if (llvm::sys::path::is_absolute(rel))

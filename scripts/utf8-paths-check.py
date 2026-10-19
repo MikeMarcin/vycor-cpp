@@ -58,6 +58,15 @@ SOURCES = {
     b"fx.cpp": b"int fx() { return 0; }\nint main() { return fx(); }\n",
 }
 
+UNICODE_PATHS = os.name == "nt" or sys.platform == "darwin"
+
+def path_bytes(raw: bytes) -> bytes:
+    # NTFS and APFS expose Unicode names. Keep raw-byte coverage on Unix
+    # filesystems that support it; use distinct Unicode names here.
+    return raw.decode("latin-1").encode("utf-8") if UNICODE_PATHS else raw
+
+SOURCES = {path_bytes(name): text for name, text in SOURCES.items()}
+
 VERBOSE = False
 FAILURES: list[str] = []
 
@@ -109,6 +118,8 @@ def run(binary: bytes, args: list[bytes]) -> subprocess.CompletedProcess:
     cmd = [binary, b"megascope"] + args
     if VERBOSE:
         print("$ " + " ".join(os.fsdecode(a) for a in cmd))
+    if os.name == "nt":
+        cmd = [os.fsdecode(a) for a in cmd]
     return subprocess.run(cmd, capture_output=True, timeout=600)
 
 
@@ -131,7 +142,7 @@ def callers_of(binary: bytes, index: bytes, name: bytes) -> list[str]:
 
 def scenario(binary: bytes, root: bytes, threads: bytes) -> None:
     label = "threads=" + os.fsdecode(threads)
-    src = os.path.join(root, b"src\xe9-" + threads)
+    src = os.path.join(root, path_bytes(b"src space \xe9-") + threads)
     build = os.path.join(src, b"build")
     os.makedirs(build)
     with open(os.path.join(build, b"compile_flags.txt"), "wb") as f:
@@ -146,8 +157,8 @@ def scenario(binary: bytes, root: bytes, threads: bytes) -> None:
         old = os.stat(path).st_mtime_ns - 60_000_000_000
         os.utime(path, ns=(old, old))
         sources += [b"--source", path]
-    index = os.path.join(root, b"idx\xe9-" + threads + b".vycs")
-    stats = os.path.join(root, b"stats\xe9-" + threads + b".json")
+    index = os.path.join(root, path_bytes(b"idx space \xe9-") + threads + b".vycs")
+    stats = os.path.join(root, path_bytes(b"stats space \xe9-") + threads + b".json")
 
     # Cold bake: the summary line names the index (index text), and
     # --stats-json lists every TU.
@@ -170,15 +181,16 @@ def scenario(binary: bytes, root: bytes, threads: bytes) -> None:
             stat_json = json.loads(f.read().decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         stat_json = {}
-    files = sorted(t.get("file", "") for t in stat_json.get("tu", []))
-    check(to_index_text(os.path.join(src, b"a\xe9.cpp")) in files,
+    files = sorted(t.get("file", "").replace("\\", "/") if os.name == "nt" else t.get("file", "")
+                   for t in stat_json.get("tu", []))
+    check(to_index_text(os.path.join(src, path_bytes(b"a\xe9.cpp"))).replace("\\", "/") in files,
           f"{label}: --stats-json lists the Latin-1 TU as index text")
 
     check(callers_of(binary, index, b"fx") == ["ca", "cb", "main"],
           f"{label}: fx has three callers after the cold bake")
 
     # A warm refresh of each Latin-1 TU in turn keeps the other's facts.
-    for name in (b"a\xe9.cpp", b"a\xe8.cpp"):
+    for name in (path_bytes(b"a\xe9.cpp"), path_bytes(b"a\xe8.cpp")):
         path = os.path.join(src, name)
         st = os.stat(path)
         os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 2_000_000_000))
@@ -218,7 +230,7 @@ def scenario(binary: bytes, root: bytes, threads: bytes) -> None:
           f"{label}: dump prints the Latin-1 comment, reversibly")
     site = next((rec.get("callSite", "") for rec in records
                  if rec.get("calleeName") == "fx"
-                 and "a" + chr(ESCAPE_BASE + 0xE9) + ".cpp"
+                 and to_index_text(path_bytes(b"a\xe9.cpp"))
                  in rec.get("callSite", "")), "")
     check(site != "", f"{label}: dump holds the call site in a\\xe9.cpp")
     r = run(binary, [b"info", b"--files", b"--index", index])
@@ -249,6 +261,9 @@ def main() -> int:
     binary = os.fsencode(os.path.abspath(opts.binary))
 
     root = os.fsencode(tempfile.mkdtemp(prefix="vycor-utf8-"))
+    if os.name == "nt":
+        root = root.replace(b"\\", b"/")
+    print("path coverage: " + ("Unicode (NTFS/APFS)" if UNICODE_PATHS else "raw non-UTF-8 bytes"))
     try:
         # In-process (--threads 1) and in isolated workers (--threads 2).
         for threads in (b"1", b"2"):

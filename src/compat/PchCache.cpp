@@ -14,11 +14,13 @@
 // limitations under the License.
 
 #include "vycor/compat/PchCache.h"
+#include "vycor/compat/ResourceDir.h"
 
 #include "clang/Tooling/CompilationDatabase.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -30,7 +32,7 @@ namespace vycor {
 namespace {
 
 /// Apply the same flag adjustments to a compile command that ToolAdjusters
-/// would apply to a ClangTool invocation. This ensures the shell-invoked
+/// would apply to a ClangTool invocation. This ensures the argument-invoked
 /// clang++ sees the same flags as ClangTool's cc1 pipeline.
 static std::vector<std::string>
 applyToolAdjusters(const std::vector<std::string> &args) {
@@ -70,7 +72,9 @@ applyToolAdjusters(const std::vector<std::string> &args) {
       }
     }
     if (!skip && args[i].find("-include") == 0 &&
-        args[i].find("pch") != std::string::npos) {
+        (args[i].find("pch") != std::string::npos ||
+         (args[i] == "-include" && i + 1 < args.size() &&
+          args[i + 1].find("pch") != std::string::npos))) {
       skip = true;
       if (args[i] == "-include")
         ++i;
@@ -89,12 +93,10 @@ applyToolAdjusters(const std::vector<std::string> &args) {
       break;
     }
   }
-#ifdef VYCOR_CLANG_RESOURCE_DIR
-  if (!hasResourceDir) {
+  if (!hasResourceDir && !clangResourceDir().empty()) {
     result.push_back("-resource-dir");
-    result.push_back(VYCOR_CLANG_RESOURCE_DIR);
+    result.push_back(clangResourceDir());
   }
-#endif
 
   return result;
 }
@@ -163,6 +165,10 @@ void PchCache::buildFromCompileCommands(
     for (size_t i = 1; i < cmd.CommandLine.size(); ++i)
       args.push_back(cmd.CommandLine[i]);
 
+    // Let the compiler resolve relative -I and forced-include paths against
+    // the compilation database directory without changing the parent's cwd.
+    args.push_back("-working-directory=" + cmd.Directory);
+
     // Find PCH source includes in this TU's flags.
     for (size_t i = 0; i < args.size(); ++i) {
       std::string pchPath;
@@ -204,21 +210,24 @@ void PchCache::buildFromCompileCommands(
     auto pchFlags = extractPchCompileFlags(adjustedFlags);
 
     // Construct: clang++ -x c++-header <flags> <pch_src> -Xclang -emit-pch -o <out>
-    std::string cmd = clangBin_;
-    cmd += " -x c++-header -Wno-error";
-    for (const auto &f : pchFlags) {
-      cmd += " '";
-      cmd += f;
-      cmd += "'";
+    auto program = llvm::sys::findProgramByName(clangBin_);
+    if (!program) {
+      llvm::errs() << "pch-cache: cannot find " << clangBin_ << ": "
+                   << program.getError().message() << "\n";
+      continue;
     }
-    cmd += " '";
-    cmd += pchSrc;
-    cmd += "' -Xclang -emit-pch -o '";
-    cmd += outPath;
-    cmd += "' 2>&1";
-
+    std::vector<std::string> command{*program, "-x", "c++-header",
+                                     "-Wno-error"};
+    command.insert(command.end(), pchFlags.begin(), pchFlags.end());
+    command.insert(command.end(),
+                   {pchSrc, "-Xclang", "-emit-pch", "-o", outPath});
+    std::vector<llvm::StringRef> args(command.begin(), command.end());
     llvm::errs() << "pch-cache: compiling " << pchSrc << " ...\n";
-    int rc = std::system(cmd.c_str());
+    std::string error;
+    int rc = llvm::sys::ExecuteAndWait(*program, args, std::nullopt, {}, 0, 0,
+                                       &error);
+    if (!error.empty())
+      llvm::errs() << "pch-cache: " << error << "\n";
 
     if (rc == 0 && llvm::sys::fs::exists(outPath)) {
       uint64_t size = 0;
@@ -268,13 +277,12 @@ std::vector<std::string> PchCache::extractPchCompileFlags(
     }
 
     // Skip dependency file flags.
-    if (skipFlags.count(arg.str())) {
-      continue;
-    }
     if (skipWithNext.count(arg.str())) {
       ++i; // skip next arg too
       continue;
     }
+    if (skipFlags.count(arg.str()))
+      continue;
 
     // Skip existing PCH includes (we're compiling the PCH itself).
     if (arg.starts_with("-include") && arg.contains("pch")) {

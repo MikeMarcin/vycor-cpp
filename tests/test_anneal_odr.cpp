@@ -23,6 +23,7 @@
 #include "vycor/anneal/Checkpoint.h"
 #include "vycor/anneal/GlobalIndex.h"
 
+#include "vycor/compat/Path.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
@@ -48,7 +49,7 @@ namespace {
   llvm::SmallString<128> made;
   if (llvm::sys::fs::createUniqueDirectory(dir, made))
     return false;
-  dir = std::string(made);
+  dir = normalizedPath(made);
   return true;
 }
 
@@ -69,7 +70,7 @@ struct OdrFixture {
     REQUIRE(makeUniqueFixtureDir(dir));
     llvm::SmallString<256> abs;
     REQUIRE(!llvm::sys::fs::real_path(dir, abs));
-    absDir = std::string(abs.str());
+    absDir = normalizedPath(abs);
 
     write("magic.hpp", R"cpp(
 #pragma once

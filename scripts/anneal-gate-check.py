@@ -269,7 +269,7 @@ class Check:
         for s in sources or []:
             full += ["--source", str(d / s)]
         full += list(argv)
-        p = subprocess.run(full, capture_output=True, text=True, cwd=d,
+        p = subprocess.run(full, capture_output=True, text=True, encoding="utf-8", cwd=d,
                            input=stdin)
         if self.verbose:
             print(f"$ anneal {' '.join(full[2:])} -> {p.returncode}",
@@ -373,7 +373,7 @@ class Check:
         code, _, _ = self.anneal(d)
         self.expect(name, code == 2, f"no --source: exit {code}, expected 2")
         p = subprocess.run([str(self.binary), "anneal", "--source", "x.cpp"],
-                           capture_output=True, text=True, cwd=d)
+                           capture_output=True, text=True, encoding="utf-8", cwd=d)
         self.expect(name, p.returncode == 2,
                     f"no --build-path: exit {p.returncode}, expected 2")
 
@@ -792,7 +792,7 @@ class Check:
             argv = [str(self.binary), "anneal", "--build-path", "build",
                     "--source", "src/use.cpp", "--source", "src/other.cpp"]
             r = subprocess.run(argv + ["--format", "json"],
-                               capture_output=True, text=True, cwd=p)
+                               capture_output=True, text=True, encoding="utf-8", cwd=p)
             try:
                 doc = json.loads(r.stdout)
             except json.JSONDecodeError:
@@ -807,7 +807,7 @@ class Check:
                         f"reported, line 6 suppressed)")
             fps += [f["fingerprint"] for f in doc.get("findings", [])]
             r = subprocess.run(argv + ["--format", "sarif"],
-                               capture_output=True, text=True, cwd=p)
+                               capture_output=True, text=True, encoding="utf-8", cwd=p)
             uris = re.findall(r'"uri": ?"([^"]*)"', r.stdout)
             self.expect(name, "src/use.cpp" in uris,
                         f"{copy}: SARIF uris {uris} (expected src/use.cpp "

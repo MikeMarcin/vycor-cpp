@@ -27,6 +27,7 @@
 
 #include <algorithm>
 
+#include "vycor/compat/Path.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
@@ -699,7 +700,7 @@ std::string absoluteFileName(const clang::SourceManager &sm,
   llvm::SmallString<256> path(name);
   sm.getFileManager().makeAbsolutePath(path);
   llvm::sys::path::remove_dots(path, /*remove_dot_dot=*/true);
-  return std::string(path);
+  return normalizedPath(path);
 }
 
 std::string IndexerVisitor::getFilePath(clang::SourceLocation loc) const {

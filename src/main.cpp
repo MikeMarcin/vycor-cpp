@@ -43,6 +43,15 @@
 
 #include "clang/Tooling/CompilationDatabase.h"
 
+#include "vycor/compat/ToolAdjusters.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Format.h"
+#include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/JSON.h"
+#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Program.h"
+#include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <chrono>
 #include <iostream>
@@ -51,17 +60,12 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Format.h"
-#include "llvm/Support/Program.h"
-#include "llvm/Support/FileSystem.h"
-#include "llvm/Support/JSON.h"
-#include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/raw_ostream.h"
-#include "vycor/compat/ToolAdjusters.h"
 
 #if defined(__unix__) || defined(__APPLE__)
 #include <sys/resource.h>
+#elif defined(_WIN32)
+#include "vycor/compat/WindowsSupport.h"
+#include <psapi.h>
 #endif
 
 /// Per-section decode timing of a snapshot load, for --stats-json and the
@@ -617,6 +621,7 @@ static llvm::cl::opt<std::string>
 // ---------------------------------------------------------------------------
 
 int main(int argc, const char **argv) {
+  llvm::InitLLVM init(argc, argv);
   // megascope verbs (docs/megascope-cli-review.md §2.1). llvm::cl
   // subcommands are single-level, so the verb is peeled off argv here:
   // query verbs never reach llvm::cl (their flags come from each tool's
@@ -1851,6 +1856,11 @@ int main(int argc, const char **argv) {
         root["peak_rss_kb"] = static_cast<int64_t>(ru.ru_maxrss);
 #endif
       }
+#elif defined(_WIN32)
+      PROCESS_MEMORY_COUNTERS memory{};
+      if (GetProcessMemoryInfo(GetCurrentProcess(), &memory, sizeof(memory)))
+        root["peak_rss_kb"] =
+            static_cast<int64_t>(memory.PeakWorkingSetSize / 1024);
 #endif
 
       llvm::json::Array tus;

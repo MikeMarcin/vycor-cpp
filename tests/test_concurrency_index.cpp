@@ -26,10 +26,10 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/ADT/SmallString.h"
 
+#include "llvm/Support/Process.h"
 #include <fstream>
 #include <optional>
 #include <string>
-#include <unistd.h>
 #include <vector>
 
 using namespace vycor;
@@ -50,7 +50,7 @@ std::string writeTempSource(const std::string &code) {
   if (ec)
     return {};
   // close() the fd immediately — we reopen as an ofstream to write.
-  ::close(fd);
+  llvm::sys::Process::SafelyCloseFileDescriptor(fd);
   std::ofstream out(std::string(tmp.str()));
   out << code;
   out.close();

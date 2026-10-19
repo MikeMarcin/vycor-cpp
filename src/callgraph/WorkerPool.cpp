@@ -37,9 +37,13 @@
 #include <thread>
 #include <unordered_map>
 
+#ifdef _WIN32
+#include "WindowsWorker.h"
+#else
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#endif
 
 namespace vycor {
 
@@ -90,11 +94,23 @@ public:
     uint64_t size = 0;
     if (llvm::sys::fs::file_size(path_, size) || size <= offset_)
       return false;
+#ifdef _WIN32
+    std::wstring wide;
+    if (!windowsUtf16(path_, wide))
+      return false;
+    std::FILE *f = _wfopen(wide.c_str(), L"rb");
+#else
     std::FILE *f = std::fopen(path_.c_str(), "rb");
+#endif
     if (!f)
       return false;
     bool found = false;
-    if (std::fseek(f, static_cast<long>(offset_), SEEK_SET) == 0) {
+#ifdef _WIN32
+    if (_fseeki64(f, static_cast<__int64>(offset_), SEEK_SET) == 0)
+#else
+    if (::fseeko(f, static_cast<off_t>(offset_), SEEK_SET) == 0)
+#endif
+    {
       char buf[4096];
       size_t n;
       while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) {
@@ -133,11 +149,13 @@ private:
 };
 
 /// llvm::sys::Wait's exit-code convention for a reaped status.
+#ifndef _WIN32
 int exitCodeOf(int status) {
   if (WIFEXITED(status))
     return WEXITSTATUS(status);
   return -2; // killed by a signal
 }
+#endif
 
 } // namespace
 
@@ -146,6 +164,12 @@ int runWorkerProcess(const std::vector<std::string> &argv,
                      const char *tool) {
   if (argv.empty())
     return -1;
+  std::string errMsg;
+#ifdef _WIN32
+  WindowsWorker child;
+  auto pid = detail::spawnTrackedChild(
+      [&] { return child.spawn(argv, logPath, limits.memoryLimitMB, errMsg); });
+#else
   std::vector<llvm::StringRef> args(argv.begin(), argv.end());
   // stdin from the null device (empty redirect path = null device); stdout
   // joins the stderr log — the parent's own stdout carries its result
@@ -153,16 +177,16 @@ int runWorkerProcess(const std::vector<std::string> &argv,
   // (identical stdout/stderr paths are dup'd onto one descriptor).
   std::optional<llvm::StringRef> redirects[3] = {
       llvm::StringRef(""), llvm::StringRef(logPath), llvm::StringRef(logPath)};
-  std::string errMsg;
   bool execFailed = false;
   llvm::sys::ProcessInfo pi;
-  long pid = detail::spawnTrackedChild([&]() -> long {
+  auto pid = detail::spawnTrackedChild([&]() -> detail::ChildId {
     pi = llvm::sys::ExecuteNoWait(argv.front(), args, /*Env=*/std::nullopt,
                                   redirects, limits.memoryLimitMB, &errMsg,
                                   &execFailed);
-    return static_cast<long>(pi.Pid);
+    return static_cast<detail::ChildId>(pi.Pid);
   });
-  if (pid <= 0) {
+#endif
+  if (pid == 0) {
     if (interruptRequested())
       return kWorkerInterrupted;
     llvm::errs() << tool << ": worker: failed to spawn " << argv.front()
@@ -170,16 +194,39 @@ int runWorkerProcess(const std::vector<std::string> &argv,
     return -1;
   }
 
-  // waitpid directly rather than llvm::sys::Wait: its timeout is a
-  // process-wide alarm(), which concurrent dispatch threads would steal
-  // from one another.
+  // Each dispatch thread owns its wait and deadline; no process-wide alarm.
+#ifndef _WIN32
   const pid_t child = static_cast<pid_t>(pid);
-  int status = 0;
-  int rc;
+#endif
+  auto wait = [&](bool block, int &code) {
+#ifdef _WIN32
+    return child.wait(block, code);
+#else
+    int status = 0;
+    pid_t result;
+    do {
+      result = ::waitpid(child, &status, block ? 0 : WNOHANG);
+    } while (result < 0 && errno == EINTR);
+    if (result < 0)
+      return -1;
+    if (result == 0)
+      return 0;
+    code = exitCodeOf(status);
+    return 1;
+#endif
+  };
+  auto terminate = [&] {
+#ifdef _WIN32
+    child.terminate();
+#else
+    ::kill(child, SIGKILL);
+#endif
+    int ignored = 0;
+    wait(true, ignored);
+  };
+  int rc = -1;
   if (limits.timeoutSeconds == 0) {
-    while (::waitpid(child, &status, 0) < 0 && errno == EINTR) {
-    }
-    rc = exitCodeOf(status);
+    wait(true, rc);
   } else {
     using Clock = std::chrono::steady_clock;
     const auto window = std::chrono::seconds(limits.timeoutSeconds);
@@ -187,22 +234,14 @@ int runWorkerProcess(const std::vector<std::string> &argv,
     auto nap = std::chrono::milliseconds(2);
     MarkerWatch progress(logPath);
     for (;;) {
-      pid_t r = ::waitpid(child, &status, WNOHANG);
-      if (r == child) {
-        rc = exitCodeOf(status);
+      int result = wait(false, rc);
+      if (result != 0)
         break;
-      }
-      if (r < 0 && errno != EINTR) {
-        rc = -1;
-        break;
-      }
       auto now = Clock::now();
       if (progress.advanced())
         deadline = now + window;
       else if (now >= deadline) {
-        ::kill(child, SIGKILL);
-        while (::waitpid(child, &status, 0) < 0 && errno == EINTR) {
-        }
+        terminate();
         llvm::errs() << tool << ": worker: no progress for "
                      << limits.timeoutSeconds
                      << "s (--worker-timeout) — killed\n";
@@ -213,6 +252,12 @@ int runWorkerProcess(const std::vector<std::string> &argv,
       nap = std::min(nap * 2, std::chrono::milliseconds(100));
     }
   }
+#ifdef _WIN32
+  // Keep the job registered until all descendants are gone. Otherwise the
+  // interrupt watcher could remove scratch files between untracking and the
+  // WindowsWorker destructor terminating a surviving grandchild.
+  child.terminate();
+#endif
   detail::untrackChild(pid);
   if (rc != 0 && rc != kWorkerTimedOut && interruptRequested())
     return kWorkerInterrupted;

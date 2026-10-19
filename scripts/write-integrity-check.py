@@ -50,8 +50,16 @@ from pathlib import Path
 
 try:
     import fcntl
-except ImportError:  # not POSIX: the lock scenario is skipped
+except ImportError:  # Windows uses native byte-range locks below.
     fcntl = None
+    import msvcrt
+
+def lock_file(file, acquire):
+    if fcntl is not None:
+        fcntl.flock(file.fileno(), fcntl.LOCK_EX if acquire else fcntl.LOCK_UN)
+    else:
+        file.seek(0)
+        msvcrt.locking(file.fileno(), msvcrt.LK_NBLCK if acquire else msvcrt.LK_UNLCK, 1)
 
 TUS = 12
 FNS = 40
@@ -97,7 +105,7 @@ class Check:
                   env: dict[str, str] | None = None
                   ) -> tuple[int, str, str]:
         p = subprocess.run([str(self.binary), "megascope", *argv],
-                           capture_output=True, text=True, cwd=cwd,
+                           capture_output=True, text=True, encoding="utf-8", cwd=cwd,
                            env={**os.environ, **(env or {})})
         if self.verbose:
             print(f"$ megascope {' '.join(argv)} -> {p.returncode}",
@@ -138,7 +146,7 @@ class Check:
         code, out, err = self.megascope(
             self.index_argv(d, idx, "--force", "--isolate-workers",
                             "--workers", "2"),
-            d, env={"TMPDIR": str(d / "no-such-dir")})
+            d, env={key: str(d / "no-such-dir") for key in ("TMPDIR", "TMP", "TEMP")})
         self.expect(name, code != 0,
                     f"index exited {code} after a bake that could not run "
                     f"(stdout {out.strip()[:200]!r})")
@@ -157,7 +165,7 @@ class Check:
                 [str(self.binary), "megascope",
                  *self.index_argv(d, idx, "--force")],
                 cwd=d, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True) for _ in range(2)]
+                text=True, encoding="utf-8") for _ in range(2)]
             results = [p.communicate() + (p.returncode,) for p in procs]
             for out, err, code in results:
                 self.expect(name, code == 0,
@@ -175,14 +183,11 @@ class Check:
 
     def lock(self) -> None:
         name = "lock"
-        if fcntl is None:
-            print(f"skip {name}: no fcntl on this platform", file=sys.stderr)
-            return
         d = self.fixture(name)
         idx = d / "index.vycs"
         self.index(d, idx)
         with open(str(idx) + ".lock", "a+") as held:
-            fcntl.flock(held.fileno(), fcntl.LOCK_EX)
+            lock_file(held, True)
             code, _, err = self.megascope(
                 self.index_argv(d, idx, "--force", "--no-wait"), d)
             self.expect(name, code != 0,
@@ -198,7 +203,7 @@ class Check:
                 time.sleep(1.5)
                 self.expect(name, waiter.poll() is None,
                             "a second writer did not wait for the lock")
-                fcntl.flock(held.fileno(), fcntl.LOCK_UN)
+                lock_file(held, False)
                 code = waiter.wait(timeout=120)
             self.expect(name, code == 0,
                         f"the waiting writer exited {code}")

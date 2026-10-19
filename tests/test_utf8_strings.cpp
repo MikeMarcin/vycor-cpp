@@ -33,6 +33,7 @@
 
 #include "SnapshotBytes.h"
 
+#include "vycor/compat/Path.h"
 #include "clang/Tooling/CompilationDatabase.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
@@ -59,6 +60,15 @@ const std::string kLatin1E = "\xe9"; // 'e' acute in Latin-1: not UTF-8
 const std::string kLatin1EText = "\xf4\x8f\xbf\xa9";
 const std::string kReplacement = "\xef\xbf\xbd"; // U+FFFD
 
+// Raw byte filenames cannot be represented by the Windows UTF-16 API or
+// APFS. The CLI utf8_paths test exercises Unicode names there instead.
+void requireRawBytePaths() {
+#if defined(_WIN32) || defined(__APPLE__)
+  SKIP("raw non-UTF-8 filenames require a byte-preserving filesystem; Unicode "
+       "paths are covered by utf8_paths");
+#endif
+}
+
 struct Latin1Fixture {
   std::string dir;
   std::string tu;
@@ -69,7 +79,7 @@ struct Latin1Fixture {
     llvm::sys::path::append(base, "vycor-utf8-" + kLatin1E);
     llvm::SmallString<128> made;
     REQUIRE(!llvm::sys::fs::createUniqueDirectory(base, made));
-    dir = std::string(made);
+    dir = normalizedPath(made);
     tu = dir + "/t" + kLatin1E + ".cpp";
     std::ofstream(tu, std::ios::binary)
         << "int g(int);\n"
@@ -127,6 +137,7 @@ std::string readAll(const std::string &path) {
 
 TEST_CASE("a bake from a Latin-1 path and source text holds UTF-8 only",
           "[utf8]") {
+  requireRawBytePaths();
   Latin1Fixture fx;
   clang::tooling::FixedCompilationDatabase db(fx.dir, {"-std=c++17"});
   BakedIndexes baked = bakeIndexes(db, {fx.tu}, {}, /*threadCount=*/1);
@@ -344,7 +355,7 @@ struct SourceDir {
     llvm::sys::path::append(base, "vycor-utf8-id");
     llvm::SmallString<128> made;
     REQUIRE(!llvm::sys::fs::createUniqueDirectory(base, made));
-    dir = std::string(made);
+    dir = normalizedPath(made);
     for (const auto &[name, text] : files)
       std::ofstream(path(name), std::ios::binary) << text;
   }
@@ -380,6 +391,7 @@ void refresh(SnapshotData &snap, const clang::tooling::CompilationDatabase &db,
 TEST_CASE("two TU paths that differ in one non-UTF-8 byte stay two TUs "
           "through a warm refresh",
           "[utf8]") {
+  requireRawBytePaths();
   const std::string a = "a\xe9.cpp", b = "a\xe8.cpp";
   SourceDir src({{a, "int fx();\nint ca() { return fx(); }\n"},
                  {b, "int fx();\nint cb() { return fx(); }\n"}});
@@ -438,6 +450,7 @@ TEST_CASE("two TU paths that differ in one non-UTF-8 byte stay two TUs "
 TEST_CASE("internal-linkage functions in files whose names differ in one "
           "non-UTF-8 byte stay two nodes",
           "[utf8]") {
+  requireRawBytePaths();
   const std::string a = "b\xe9.cpp", b = "b\xe8.cpp";
   SourceDir src({{a, "static int helper() { return 1; }\n"
                      "int ub() { return helper(); }\n"},

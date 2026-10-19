@@ -14,6 +14,7 @@
 // limitations under the License.
 
 #include "vycor/impact/PatchMapping.h"
+#include "vycor/compat/Path.h"
 
 #include <algorithm>
 #include <map>
@@ -135,8 +136,9 @@ llvm::StringRef stripDot(llvm::StringRef p) {
 
 // Equal, or one a component-suffix of the other.
 bool pathsMatch(llvm::StringRef a, llvm::StringRef b) {
-  a = stripDot(a);
-  b = stripDot(b);
+  const std::string normalA = normalizedPath(a), normalB = normalizedPath(b);
+  a = stripDot(normalA);
+  b = stripDot(normalB);
   if (a.empty() || b.empty())
     return false;
   if (a == b)

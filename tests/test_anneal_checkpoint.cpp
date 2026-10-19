@@ -23,6 +23,7 @@
 #include "vycor/anneal/Indexer.h"
 #include "vycor/compat/ToolAdjusters.h"
 
+#include "vycor/compat/Path.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -52,7 +53,7 @@ namespace {
   llvm::SmallString<128> made;
   if (llvm::sys::fs::createUniqueDirectory(dir, made))
     return false;
-  dir = std::string(made);
+  dir = normalizedPath(made);
   return true;
 }
 
@@ -119,7 +120,7 @@ void use_b() {
     llvm::SmallString<256> abs;
     REQUIRE(!llvm::sys::fs::real_path(dir, abs));
     llvm::sys::path::append(abs, name);
-    return std::string(abs.str());
+    return normalizedPath(abs);
   }
 
   // user_b (the ext.hpp contributor) deliberately in the middle.

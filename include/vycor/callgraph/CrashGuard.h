@@ -16,6 +16,7 @@
 #pragma once
 
 #include "llvm/ADT/STLFunctionalExtras.h"
+#include <string>
 
 namespace vycor {
 
@@ -63,5 +64,8 @@ void disableCrashGuard();
 /// `fn` returned normally; false when it crashed, with the signal number
 /// in `*signalOut` (when non-null).
 bool runCrashGuarded(llvm::function_ref<void()> fn, int *signalOut = nullptr);
+
+/// Native crash reason: Unix signal number or Windows SEH exception code.
+std::string crashDescription(int code);
 
 } // namespace vycor

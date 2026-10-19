@@ -11,6 +11,7 @@ add_library(vycor_lib
   morph/RulesParser.cpp
   morph/TransformPipeline.cpp
   compat/PchCache.cpp
+  compat/ResourceDir.cpp
   callgraph/AtomicFile.cpp
   callgraph/CallGraph.cpp
   callgraph/CallGraphBuilder.cpp
@@ -53,6 +54,10 @@ target_include_directories(vycor_lib PUBLIC
 )
 
 target_compile_options(vycor_lib PRIVATE ${VYCOR_WARNING_FLAGS})
+if(WIN32)
+  target_compile_definitions(vycor_lib PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(vycor_lib PUBLIC psapi)
+endif()
 
 target_link_libraries(vycor_lib PUBLIC
   clangTooling
@@ -74,17 +79,17 @@ target_link_libraries(vycor_lib PUBLIC
 # (stdarg.h, etc.) when consuming compilation databases from other toolchains.
 if(LLVM_FOUND)
   execute_process(
-    COMMAND "${LLVM_TOOLS_BINARY_DIR}/clang" -print-resource-dir
+    COMMAND "${LLVM_TOOLS_BINARY_DIR}/clang${CMAKE_EXECUTABLE_SUFFIX}" -print-resource-dir
     OUTPUT_VARIABLE _VYCOR_RESOURCE_DIR
     OUTPUT_STRIP_TRAILING_WHITESPACE
     ERROR_QUIET)
   if(_VYCOR_RESOURCE_DIR)
-    # PUBLIC, not PRIVATE: getResourceDirAdjuster() is an inline function in
-    # ToolAdjusters.h whose body is #ifdef'd on this macro. Any consumer TU
-    # (main.cpp, a test) compiled without it emits a no-op weak definition
-    # that can win symbol resolution over the lib's real one — silently
-    # dropping -resource-dir injection binary-wide (ODR).
-    target_compile_definitions(vycor_lib PUBLIC
+    file(TO_CMAKE_PATH "${_VYCOR_RESOURCE_DIR}" _VYCOR_RESOURCE_DIR)
+    target_compile_definitions(vycor_lib PRIVATE
+      "VYCOR_CLANG_RESOURCE_VERSION=\"${LLVM_VERSION_MAJOR}\"")
+    # ResourceDir.cpp resolves this fallback or the adjacent installed headers.
+    # All consumers, including input fingerprinting, use that same function.
+    target_compile_definitions(vycor_lib PRIVATE
       "VYCOR_CLANG_RESOURCE_DIR=\"${_VYCOR_RESOURCE_DIR}\"")
   endif()
 endif()
@@ -101,8 +106,8 @@ if(APPLE)
     ERROR_QUIET)
   if(_VYCOR_DEFAULT_SYSROOT)
     message(STATUS "Default macOS sysroot: ${_VYCOR_DEFAULT_SYSROOT}")
-    # PUBLIC for the same ODR reason as VYCOR_CLANG_RESOURCE_DIR above
-    # (getSysrootAdjuster's fallback is #ifdef'd on this macro).
+    # PUBLIC: getSysrootAdjuster's inline fallback is #ifdef'd on this macro.
+    # All translation units must see the same body to avoid an ODR violation.
     target_compile_definitions(vycor_lib PUBLIC
       "VYCOR_DEFAULT_SYSROOT=\"${_VYCOR_DEFAULT_SYSROOT}\"")
   endif()
@@ -133,3 +138,11 @@ target_compile_definitions(vycor-cpp PRIVATE
 # keeps packaging minimal).
 include(GNUInstallDirs)
 install(TARGETS vycor-cpp RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+if(WIN32)
+  if(NOT EXISTS "${_VYCOR_RESOURCE_DIR}/include/stddef.h")
+    message(FATAL_ERROR "The Windows LLVM SDK must include matching Clang resource headers")
+  endif()
+  install(DIRECTORY "${_VYCOR_RESOURCE_DIR}/include"
+    DESTINATION "lib/clang/${LLVM_VERSION_MAJOR}")
+endif()

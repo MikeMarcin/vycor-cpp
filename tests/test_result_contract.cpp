@@ -33,12 +33,12 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem.h"
 
+#include "llvm/Support/Process.h"
 #include <cstdio>
-#include <initializer_list>
 #include <fstream>
+#include <initializer_list>
 #include <sstream>
 #include <string>
-#include <unistd.h>
 #include <vector>
 
 using namespace vycor;
@@ -66,7 +66,7 @@ Baked bake(const std::string &code) {
   auto ec = llvm::sys::fs::createTemporaryFile("vycor_contract", "cpp", fd,
                                                tmp);
   REQUIRE_FALSE(ec);
-  ::close(fd);
+  llvm::sys::Process::SafelyCloseFileDescriptor(fd);
   {
     std::ofstream out(std::string(tmp.str()));
     out << code;
