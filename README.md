@@ -612,3 +612,8 @@ fragility — in order to relieve it. **morph** reshapes amorphous structure —
 AST transforms. **megascope** is the persistent far-seeing instrument — the
 cross-TU index and its query verbs (its ephemeral mode absorbed **prism**,
 which decomposed one point into its components — call-site control flow).
+
+### Native Windows
+
+For the pinned x64 LLVM/Clang development SDK, build and installation commands,
+platform guarantees and validation, see [Native Windows](docs/windows-build.md).

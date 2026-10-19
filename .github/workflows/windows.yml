@@ -1,0 +1,57 @@
+name: Native Windows
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - run: git submodule update --init --depth 1 -- extern/Catch2
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/llvm-sdk
+          key: windows-x64-llvm-22.1.8-d96c2cc1
+      - name: Install matching development SDK
+        shell: pwsh
+        run: |
+          $sdk = ./scripts/install-windows-llvm.ps1 -Destination "$env:RUNNER_TEMP/llvm-sdk"
+          "VYCOR_LLVM=$sdk" >> $env:GITHUB_ENV
+          "$sdk/bin" >> $env:GITHUB_PATH
+      - name: Configure and build
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_C_COMPILER=$env:VYCOR_LLVM/bin/clang-cl.exe" `
+            "-DCMAKE_CXX_COMPILER=$env:VYCOR_LLVM/bin/clang-cl.exe" `
+            "-DLLVM_DIR=$env:VYCOR_LLVM/lib/cmake/llvm" `
+            "-DClang_DIR=$env:VYCOR_LLVM/lib/cmake/clang" `
+            -DVYCOR_USE_SUBMODULE=OFF -DVYCOR_WERROR=ON
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build --parallel 4
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Native regression suite
+        run: ctest --test-dir build --parallel 4 --output-on-failure
+      - name: Install and test relocated resource headers
+        shell: pwsh
+        run: |
+          cmake --install build --prefix "$env:RUNNER_TEMP/stage"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Move-Item "$env:RUNNER_TEMP/stage" "$env:RUNNER_TEMP/vycor moved ü"
+          python scripts/windows-install-check.py --prefix "$env:RUNNER_TEMP/vycor moved ü" --sdk "$env:VYCOR_LLVM"
+      - name: Preserve diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-windows-test-logs
+          path: build/Testing/Temporary/

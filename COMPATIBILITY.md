@@ -355,3 +355,10 @@ on a real tag push.
   (Linux + macOS), packaging, and the Homebrew tap update.
 - `bearbones/homebrew-vycor-cpp` — the self-hosted Homebrew tap.
 - `AGENTS.md` — top-level developer guide; cross-references this document.
+
+## Native Windows
+
+Native Windows x64 uses a matching LLVM/Clang development SDK and Windows Job
+Objects for worker containment. See [the Windows guide](docs/windows-build.md)
+for the pinned LLVM 22 recipe, NTFS replacement guarantees, resource-header
+packaging, compilation-database adaptations and differences from Unix.
